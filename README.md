@@ -75,3 +75,12 @@ Total uncompressed size: 19781 MiB
 Total compressed size: 2402 MiB
 Finished in 6m42.871349533s
 Memory usage: 30.14 MB
+
+Limiting cpu consumption to 50% by using systemd-run:
+
+systemd-run --scope -p CPUQuota=50% t-sync -s "../sample_data_size1" -d "oci://bmcx0flrsnis@test-bucket-for-poc/output_cpu_limit.zip" -auth-type OCI_CONFIG_FILE
+
+Total uncompressed size: 19781 MiB
+Total compressed size: 2402 MiB
+Finished in 8m20.937375689s
+Memory usage: 30.04 MB
