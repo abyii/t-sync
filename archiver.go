@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/abyii/zip-xxh3"
+	"github.com/abyii/zip-xxh3" // Assuming this is the import path from your go.mod
 )
 
 type countingWriter struct {
@@ -20,9 +20,10 @@ func (cw *countingWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func CreateZipArchive(srcDir string, writer io.Writer) error {
+func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password string) error {
 	cw := &countingWriter{writer: writer}
 	zipWriter := zip.NewWriter(cw)
+
 	defer zipWriter.Close()
 	fmt.Printf("Creating zip archive for %s\n", srcDir)
 	totalUncompressed := int64(0)
@@ -46,14 +47,33 @@ func CreateZipArchive(srcDir string, writer io.Writer) error {
 		}
 		defer srcFile.Close()
 
-		header := &zip.FileHeader{
-			Name:   relPath,
-			Method: zip.Deflate,
+		var entryWriter io.Writer
+		if password != "" {
+			var encMethod zip.EncryptionMethod
+			switch encryptionType {
+			case EncryptionTypeZipCrypto:
+				encMethod = zip.StandardEncryption
+			case EncryptionTypeAES128:
+				encMethod = zip.AES128Encryption
+			case EncryptionTypeAES192:
+				encMethod = zip.AES192Encryption
+			case EncryptionTypeAES256:
+				encMethod = zip.AES256Encryption
+			default:
+				encMethod = zip.StandardEncryption
+			}
+			entryWriter, err = zipWriter.Encrypt(relPath, password, encMethod)
+		} else {
+			header := &zip.FileHeader{
+				Name:   relPath,
+				Method: zip.Deflate,
+			}
+			entryWriter, err = zipWriter.CreateHeader(header)
 		}
-		entryWriter, err := zipWriter.CreateHeader(header)
 		if err != nil {
 			return err
 		}
+
 		written, err := io.Copy(entryWriter, srcFile)
 		if err != nil {
 			return err
@@ -69,8 +89,6 @@ func CreateZipArchive(srcDir string, writer io.Writer) error {
 	}
 
 	fmt.Printf("\nTotal uncompressed size: %d MiB\n", totalUncompressed/1024/1024)
-
-	// 5. After everything is done, we can simply check the total.
 	fmt.Printf("Total compressed size: %d MiB\n", cw.total/1024/1024)
 
 	return nil

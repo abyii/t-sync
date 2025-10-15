@@ -14,7 +14,9 @@ type Config struct {
 	Destination      *url.URL
 	AuthType         string
 	MaxPartsInMemory int
-	MinPartSize      int
+	MinPartSize      int // in bytes
+	Password         string
+	EncryptionType   string
 }
 
 // DestDetails holds parsed details from the destination URL.
@@ -26,9 +28,16 @@ type DestDetails struct {
 }
 
 const (
+	// auth types
 	AuthTypeOCIConfigFile       = "OCI_CONFIG_FILE"
 	AuthTypeOKEWorkloadIdentity = "OKE_WORKLOAD_IDENTITY"
 	AuthTypeInstancePrincipal   = "INSTANCE_PRINCIPAL"
+
+	// encryption types
+	EncryptionTypeZipCrypto = "zipcrypto"
+	EncryptionTypeAES128    = "aes128"
+	EncryptionTypeAES192    = "aes192"
+	EncryptionTypeAES256    = "aes256"
 )
 
 // isValidAuthType checks whether the provided auth-type string matches
@@ -83,11 +92,20 @@ func ParseFlags() (*Config, error) {
 	cfg := &Config{}
 	var destStr string
 
+	// source and destination configuration
 	flag.StringVar(&cfg.Source, "s", "", "Source directory to zip.")
 	flag.StringVar(&destStr, "d", "", "Destination URI (e.g., file:///path/to/file.zip, oci://namespace@bucket/key).")
+
+	// Auth incase of object storage
 	flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (e.g., OCI_CONFIG_FILE, OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL).")
-	flag.IntVar(&cfg.MaxPartsInMemory, "max-parts-in-memory", 10, "Maximum number of parts to hold in memory before applying backpressure.")
-	flag.IntVar(&cfg.MinPartSize, "min-part-size-mb", 10, "Minimum part size in MB for multipart uploads.")
+
+	// multipart upload config
+	flag.IntVar(&cfg.MaxPartsInMemory, "max-parts-in-memory", 10, "Maximum number of parts to hold in memory before applying backpressure. (Default: 10)")
+	flag.IntVar(&cfg.MinPartSize, "min-part-size-mb", 10, "Minimum part size in MB for multipart uploads. (Default: 10)")
+
+	// password when zip encryption is enabled
+	flag.StringVar(&cfg.Password, "password", "", "Password for encrypting the zip file.")
+	flag.StringVar(&cfg.EncryptionType, "encryption-type", EncryptionTypeZipCrypto, "Encryption type (e.g., zipcrypto, aes128, aes192, aes256). (Default: zipcrypto)")
 
 	flag.Parse()
 
@@ -117,6 +135,16 @@ func ParseFlags() (*Config, error) {
 			return nil, fmt.Errorf("unsupported auth-type for oci: %s", cfg.AuthType)
 		}
 	}
+
+	if cfg.Password != "" && !(cfg.EncryptionType == EncryptionTypeZipCrypto || cfg.EncryptionType == EncryptionTypeAES128 || cfg.EncryptionType == EncryptionTypeAES192 || cfg.EncryptionType == EncryptionTypeAES256) {
+		flag.Usage()
+		return nil, fmt.Errorf("unsupported encryption-type: %s", cfg.EncryptionType)
+	}
+	if cfg.Password == "" && cfg.EncryptionType != "ZipCrypto" {
+		flag.Usage()
+		return nil, fmt.Errorf("password is required when encryption-type is specified")
+	}
+
 	cfg.Destination = destURL
 	cfg.MinPartSize = cfg.MinPartSize * 1024 * 1024 // Convert to bytes
 
