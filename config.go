@@ -17,6 +17,7 @@ type Config struct {
 	MinPartSize      int // in bytes
 	Password         string
 	EncryptionType   string
+	IgnoreFile       string
 }
 
 // DestDetails holds parsed details from the destination URL.
@@ -107,6 +108,9 @@ func ParseFlags() (*Config, error) {
 	flag.StringVar(&cfg.Password, "password", "", "Password for encrypting the zip file.")
 	flag.StringVar(&cfg.EncryptionType, "encryption-type", EncryptionTypeZipCrypto, "Encryption type (e.g., zipcrypto, aes128, aes192, aes256). (Default: zipcrypto)")
 
+	// ignore file
+	flag.StringVar(&cfg.IgnoreFile, "ignore-file", "", "Path to a file with .gitignore style patterns to ignore. File can be named '.tsyncignore'.")
+
 	flag.Parse()
 
 	if cfg.Source == "" || destStr == "" {
@@ -140,7 +144,7 @@ func ParseFlags() (*Config, error) {
 		flag.Usage()
 		return nil, fmt.Errorf("unsupported encryption-type: %s", cfg.EncryptionType)
 	}
-	if cfg.Password == "" && cfg.EncryptionType != "ZipCrypto" {
+	if cfg.Password == "" && cfg.EncryptionType != EncryptionTypeZipCrypto {
 		flag.Usage()
 		return nil, fmt.Errorf("password is required when encryption-type is specified")
 	}

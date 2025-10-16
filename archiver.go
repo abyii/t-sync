@@ -20,7 +20,17 @@ func (cw *countingWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password string) error {
+func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password string, ignoreFile string) error {
+
+	var ignorer IgnoreParser
+	if ignoreFile != "" {
+		gi, err := CompileIgnoreFile(ignoreFile)
+		if err != nil {
+			return fmt.Errorf("failed to compile ignore file: %v", err)
+		}
+		ignorer = gi
+	}
+
 	cw := &countingWriter{writer: writer}
 	zipWriter := zip.NewWriter(cw)
 
@@ -39,6 +49,11 @@ func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password 
 		relPath, err := filepath.Rel(srcDir, path)
 		if err != nil {
 			return err
+		}
+
+		if ignorer != nil && ignorer.MatchesPath(relPath) {
+			fmt.Printf("Ignoring %s\n", relPath)
+			return nil
 		}
 
 		srcFile, err := os.Open(path)
