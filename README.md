@@ -1,3 +1,8 @@
+build:
+CGO_ENABLED=0 go build -ldflags="-s -w"
+upx t-sync
+
+
 WSL (Linux AMD 64):
     comp1 (1023 Mib):
         Deflate: 

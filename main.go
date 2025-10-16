@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/pprof"
 	"sync"
 	"time"
 )
@@ -22,16 +21,17 @@ func main() {
 	fmt.Printf("Source Directory: %s\n", cfg.Source)
 	fmt.Printf("Destination: %s\n", cfg.Destination)
 
-	profileFileName := "cpu.prof"
-	cpuProf, err := os.Create(profileFileName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer cpuProf.Close()
-	if profErr := pprof.StartCPUProfile(cpuProf); profErr != nil {
-		log.Fatal("could not start CPU profile: ", profErr)
-	}
-	defer pprof.StopCPUProfile()
+	// this is for cpu profiling. dev only
+	// profileFileName := "cpu.prof"
+	// cpuProf, err := os.Create(profileFileName)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// defer cpuProf.Close()
+	// if profErr := pprof.StartCPUProfile(cpuProf); profErr != nil {
+	// 	log.Fatal("could not start CPU profile: ", profErr)
+	// }
+	// defer pprof.StopCPUProfile()
 
 	start := time.Now()
 
