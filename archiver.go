@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/abyii/zip-xxh3" // Assuming this is the import path from your go.mod
+	"github.com/abyii/zip-xxh3"
 )
 
 type countingWriter struct {
@@ -42,7 +42,8 @@ func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password 
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 
