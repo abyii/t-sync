@@ -1,7 +1,14 @@
+// exit codes that have similar meaning to HTTP status codes
+ExitCodeInvalidParameters    = 400 // Bad Parameters
+ExitCodeAuthenticationFailed = 401 // Authentication Failed with Object Storage Service
+ExitCodeUploadFailed         = 502 // Upload Failed with Object Storage Service
+ExitCodeUploaderClientFailed = 503 // Initialization of Uploader Client Failed with Object Storage Service
+ExitCodeZipArchiverFailed    = 504 // Failed to create zip archive
+ExitCodeInternalCodeError    = 500 // Internal Code Error. Problem when closing IO or Upload Channel Writer
+
 build:
 CGO_ENABLED=0 go build -ldflags="-s -w"
 upx t-sync
-
 
 WSL (Linux AMD 64):
     comp1 (1023 Mib):

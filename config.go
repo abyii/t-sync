@@ -39,6 +39,14 @@ const (
 	EncryptionTypeAES128    = "aes128"
 	EncryptionTypeAES192    = "aes192"
 	EncryptionTypeAES256    = "aes256"
+
+	// exit codes that have similar meaning to HTTP status codes
+	ExitCodeInvalidParameters    = 400 // Bad Parameters
+	ExitCodeAuthenticationFailed = 401 // Authentication Failed with Object Storage Service
+	ExitCodeUploadFailed         = 502 // Upload Failed with Object Storage Service
+	ExitCodeUploaderClientFailed = 503 // Initialization of Uploader Client Failed with Object Storage Service
+	ExitCodeZipArchiverFailed    = 504 // Failed to create zip archive
+	ExitCodeInternalCodeError    = 500 // Internal Code Error. Problem when closing IO or Upload Channel Writer
 )
 
 // isValidAuthType checks whether the provided auth-type string matches
