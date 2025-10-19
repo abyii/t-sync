@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Source           string
 	Destination      *url.URL
+	CompressionLevel int
 	AuthType         string
 	MaxPartsInMemory int
 	MinPartSize      int // in bytes
@@ -104,6 +105,9 @@ func ParseFlags() (*Config, error) {
 	// source and destination configuration
 	flag.StringVar(&cfg.Source, "s", "", "Source directory to zip.")
 	flag.StringVar(&destStr, "d", "", "Destination URI (e.g., file:///path/to/file.zip, oci://namespace@bucket/key).")
+
+	// compression level: default selected is 6 for best speed vs compression ratio tradeoff.
+	flag.IntVar(&cfg.CompressionLevel, "compression-level", 6, "Compression level (0-9). (Default: 9)")
 
 	// Auth incase of object storage
 	flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (e.g., OCI_CONFIG_FILE, OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL).")

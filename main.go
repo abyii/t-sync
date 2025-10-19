@@ -75,7 +75,7 @@ func main() {
 		}()
 	}
 
-	if err := CreateZipArchive(cfg.Source, writer, cfg.EncryptionType, cfg.Password, cfg.IgnoreFile); err != nil {
+	if err := CreateZipArchive(cfg.Source, writer, cfg.CompressionLevel, cfg.EncryptionType, cfg.Password, cfg.IgnoreFile); err != nil {
 		exitWithErrorCode(ExitCodeZipArchiverFailed, "Failed to create zip archive: %v", err)
 	}
 

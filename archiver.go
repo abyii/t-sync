@@ -20,7 +20,7 @@ func (cw *countingWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password string, ignoreFile string) error {
+func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, encryptionType string, password string, ignoreFile string) error {
 
 	var ignorer IgnoreParser
 	if ignoreFile != "" {
@@ -78,13 +78,9 @@ func CreateZipArchive(srcDir string, writer io.Writer, encryptionType, password 
 			default:
 				encMethod = zip.StandardEncryption
 			}
-			entryWriter, err = zipWriter.Encrypt(relPath, password, encMethod)
+			entryWriter, err = zipWriter.Create(relPath, zip.Deflate, compressionLevel, encMethod, password)
 		} else {
-			header := &zip.FileHeader{
-				Name:   relPath,
-				Method: zip.Deflate,
-			}
-			entryWriter, err = zipWriter.CreateHeader(header)
+			entryWriter, err = zipWriter.Create(relPath, zip.Deflate, compressionLevel, zip.NoEncryption, "")
 		}
 		if err != nil {
 			return err
