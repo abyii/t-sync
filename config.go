@@ -107,7 +107,7 @@ func ParseFlags() (*Config, error) {
 	flag.StringVar(&destStr, "d", "", "Destination URI (e.g., file:///path/to/file.zip, oci://namespace@bucket/key).")
 
 	// compression level: default selected is 6 for best speed vs compression ratio tradeoff.
-	flag.IntVar(&cfg.CompressionLevel, "compression-level", 6, "Compression level (0-9). (Default: 9)")
+	flag.IntVar(&cfg.CompressionLevel, "compression-level", 6, "Compression level (0-9). (Default: 6)")
 
 	// Auth incase of object storage
 	flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (e.g., OCI_CONFIG_FILE, OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL).")
