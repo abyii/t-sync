@@ -96,19 +96,33 @@ func (u *OCIUploader) Initiate(ctx context.Context) (string, error) {
 		},
 	}
 
-	resp, err := u.client.CreateMultipartUpload(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("failed to initiate multipart upload: %v", err)
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		resp, err := u.client.CreateMultipartUpload(ctx, req)
+		if err == nil {
+			uploadID := *resp.UploadId
+			log.Printf("Successfully initiated multipart upload with ID: %s", uploadID)
+			return uploadID, nil
+		}
+
+		lastErr = err
+		if attempt < 3 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("Attempt %d failed to initiate multipart upload: %v. Retrying in %v...", attempt, lastErr, backoff)
+
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("context cancelled while waiting to retry initiate: %v", ctx.Err())
+			case <-time.After(backoff):
+				// retry
+			}
+		}
 	}
 
-	uploadID := *resp.UploadId
-	log.Printf("Successfully initiated multipart upload with ID: %s", uploadID)
-	return uploadID, nil
+	return "", fmt.Errorf("failed to initiate multipart upload after 3 attempts: %v", lastErr)
 }
 
 func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) (string, error) {
-	log.Printf("Uploading part %d with %d bytes", partNumber, len(data))
-
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		req := objectstorage.UploadPartRequest{
@@ -125,7 +139,7 @@ func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumbe
 		if err == nil {
 			// Return the ETag from the response
 			if resp.ETag != nil {
-				log.Printf("Successfully uploaded part %d with ETag: %s", partNumber, *resp.ETag)
+				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, *resp.ETag, len(data))
 				return *resp.ETag, nil
 			}
 			lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
@@ -137,7 +151,13 @@ func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumbe
 		if attempt < 3 {
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s
 			log.Printf("Attempt %d failed for part %d: %v. Retrying in %v...", attempt, partNumber, lastErr, backoff)
-			time.Sleep(backoff)
+			
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("context cancelled while waiting to retry upload part %d: %v", partNumber, ctx.Err())
+			case <-time.After(backoff):
+				// retry
+			}
 		}
 	}
 
@@ -150,8 +170,8 @@ func (u *OCIUploader) Complete(ctx context.Context, uploadID string, etags map[i
 	parts := make([]objectstorage.CommitMultipartUploadPartDetails, 0, len(etags))
 	for partNum, etag := range etags {
 		parts = append(parts, objectstorage.CommitMultipartUploadPartDetails{
-			PartNum: &partNum,
-			Etag:    &etag,
+			PartNum: common.Int(partNum),
+			Etag:    common.String(etag),
 		})
 	}
 
@@ -165,33 +185,66 @@ func (u *OCIUploader) Complete(ctx context.Context, uploadID string, etags map[i
 		},
 	}
 
-	_, err := u.client.CommitMultipartUpload(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to complete multipart upload: %v", err)
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err := u.client.CommitMultipartUpload(ctx, req)
+		if err == nil {
+			log.Printf("Successfully completed multipart upload %s", uploadID)
+			return nil
+		}
+
+		lastErr = err
+		if attempt < 3 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("Attempt %d failed to complete multipart upload %s: %v. Retrying in %v...", attempt, uploadID, lastErr, backoff)
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting to retry complete: %v", ctx.Err())
+			case <-time.After(backoff):
+				// retry
+			}
+		}
 	}
 
-	log.Printf("Successfully completed multipart upload %s", uploadID)
-	return nil
+	return fmt.Errorf("failed to complete multipart upload after 3 attempts: %v", lastErr)
 }
 
 func (u *OCIUploader) PutObject(ctx context.Context, data []byte) error {
 	log.Printf("Putting object %s with %d bytes (simple upload)", u.object, len(data))
 
-	req := objectstorage.PutObjectRequest{
-		NamespaceName: &u.namespace,
-		BucketName:    &u.bucket,
-		ObjectName:    &u.object,
-		ContentLength: common.Int64(int64(len(data))),
-		PutObjectBody: io.NopCloser(bytes.NewReader(data)),
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		req := objectstorage.PutObjectRequest{
+			NamespaceName: &u.namespace,
+			BucketName:    &u.bucket,
+			ObjectName:    &u.object,
+			ContentLength: common.Int64(int64(len(data))),
+			// Re-create the reader for each attempt in case the payload was partially read
+			PutObjectBody: io.NopCloser(bytes.NewReader(data)),
+		}
+
+		_, err := u.client.PutObject(ctx, req)
+		if err == nil {
+			log.Printf("Successfully put object %s", u.object)
+			return nil
+		}
+
+		lastErr = err
+		if attempt < 3 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("Attempt %d failed to put object %s: %v. Retrying in %v...", attempt, u.object, lastErr, backoff)
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting to retry put object: %v", ctx.Err())
+			case <-time.After(backoff):
+				// retry
+			}
+		}
 	}
 
-	_, err := u.client.PutObject(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to put object: %v", err)
-	}
-
-	log.Printf("Successfully put object %s", u.object)
-	return nil
+	return fmt.Errorf("failed to put object after 3 attempts: %v", lastErr)
 }
 
 func (u *OCIUploader) Abort(ctx context.Context, uploadID string) error {
@@ -204,13 +257,35 @@ func (u *OCIUploader) Abort(ctx context.Context, uploadID string) error {
 		UploadId:      &uploadID,
 	}
 
-	_, err := u.client.AbortMultipartUpload(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to abort multipart upload: %v", err)
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err := u.client.AbortMultipartUpload(ctx, req)
+		if err == nil {
+			log.Printf("Successfully aborted multipart upload %s", uploadID)
+			return nil
+		}
+
+		// If the upload does not exist, it was likely already aborted or completed successfully
+		if strings.Contains(err.Error(), "NoSuchUpload") || strings.Contains(err.Error(), "404") {
+			log.Printf("Multipart upload %s already aborted or not found", uploadID)
+			return nil
+		}
+
+		lastErr = err
+		if attempt < 3 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("Attempt %d failed to abort multipart upload %s: %v. Retrying in %v...", attempt, uploadID, lastErr, backoff)
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting to retry abort: %v", ctx.Err())
+			case <-time.After(backoff):
+				// retry
+			}
+		}
 	}
 
-	log.Printf("Successfully aborted multipart upload %s", uploadID)
-	return nil
+	return fmt.Errorf("failed to abort multipart upload after 3 attempts: %v", lastErr)
 }
 
 // GetObjectRange retrieves a specific byte range from an object in OCI Object Storage

@@ -3,12 +3,14 @@ module t-sync
 go 1.24.4
 
 require (
-	github.com/abyii/zip-xxh3 v1.2.0
+	github.com/abyii/zip-xxh3 v1.7.0
 	github.com/oracle/oci-go-sdk/v65 v65.101.0
 )
 
 require (
+	github.com/aws/aws-sdk-go v1.55.8 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect

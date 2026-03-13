@@ -6,6 +6,6 @@ import (
 )
 
 func exitWithErrorCode(code int, format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(code)
+    fmt.Fprintf(os.Stderr, format+"\n", args...)
+    os.Exit(code)
 }
