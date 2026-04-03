@@ -138,7 +138,7 @@ func ParseFlags() (*Config, error) {
     flag.IntVar(&cfg.CompressionLevel, "compression-level", DefaultCompressionLevel, "Compression level (0-9).")
 
     // Auth incase of object storage
-    flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (e.g., OCI_CONFIG_FILE, OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL, S3_KEYS[ACCESS_KEY:SECRET_KEY]).")
+    flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (e.g., OCI_CONFIG_FILE, OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL, S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]).")
 
     // multipart upload config
     flag.IntVar(&cfg.MaxPartsInMemory, "max-parts-in-memory", DefaultMaxPartsInMemory, "Maximum number of parts to hold in memory before applying backpressure.")
@@ -181,7 +181,7 @@ func ParseFlags() (*Config, error) {
     case "s3":
         if !strings.HasPrefix(cfg.AuthType, "S3_ACCESS_KEYS[") || !strings.HasSuffix(cfg.AuthType, "]") || !strings.Contains(cfg.AuthType, ":") {
             flag.Usage()
-            return nil, fmt.Errorf("unsupported auth-type for s3: %s, expected S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY]", cfg.AuthType)
+            return nil, fmt.Errorf("unsupported auth-type for s3: %s, expected S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]", cfg.AuthType)
         }
     }
 

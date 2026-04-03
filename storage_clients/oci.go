@@ -1,3 +1,5 @@
+//go:build oci
+
 package storage_clients
 
 import (
@@ -13,6 +15,12 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/oracle/oci-go-sdk/v65/objectstorage"
 )
+
+func init() {
+	RegisterUploader("oci", func(bucket, object, authType, namespace string) (interface{}, error) {
+		return NewOCIUploader(namespace, bucket, object, authType)
+	})
+}
 
 // OCIUploader handles multipart uploads to OCI Object Storage.
 type OCIUploader struct {
@@ -136,11 +144,14 @@ func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumbe
 		}
 
 		resp, err := u.client.UploadPart(ctx, req)
+		req.UploadPartBody = nil
 		if err == nil {
 			// Return the ETag from the response
 			if resp.ETag != nil {
-				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, *resp.ETag, len(data))
-				return *resp.ETag, nil
+				// Copy the string to decouple from potential SDK response buffers
+				etag := string([]byte(*resp.ETag))
+				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, etag, len(data))
+				return etag, nil
 			}
 			lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
 			// Fall through to retry logic, as this is unexpected
@@ -224,7 +235,8 @@ func (u *OCIUploader) PutObject(ctx context.Context, data []byte) error {
 			PutObjectBody: io.NopCloser(bytes.NewReader(data)),
 		}
 
-		_, err := u.client.PutObject(ctx, req)
+		resp, err := u.client.PutObject(ctx, req)
+		req.PutObjectBody = nil
 		if err == nil {
 			log.Printf("Successfully put object %s", u.object)
 			return nil

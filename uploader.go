@@ -28,15 +28,17 @@ type ObjectStorageUploader interface {
 
 // NewUploader is a factory function that returns an uploader based on the provider.
 func NewUploader(details *DestDetails, authType string) (ObjectStorageUploader, error) {
-    if details.Provider == "oci" {
-        log.Printf("Using OCI uploader for namespace '%s', bucket '%s'", details.Namespace, details.Bucket)
-        return storage_clients.NewOCIUploader(details.Namespace, details.Bucket, details.Key, authType)
-    } else if details.Provider == "s3" {
-        log.Printf("Using S3 uploader for bucket '%s'", details.Bucket)
-        return storage_clients.NewS3Uploader(details.Bucket, details.Key, authType)
-    } else {
-        return nil, fmt.Errorf("no uploader available for provider: %s", details.Provider)
+    uploader, err := storage_clients.GetUploader(details.Provider, details.Bucket, details.Key, authType, details.Namespace)
+    if err != nil {
+        return nil, err
     }
+    
+    // Type assertion to the interface
+    if u, ok := uploader.(ObjectStorageUploader); ok {
+        return u, nil
+    }
+    
+    return nil, fmt.Errorf("internal error: registered uploader for '%s' does not implement ObjectStorageUploader interface", details.Provider)
 }
 
 // channelWriter is an io.Writer that writes to a channel of parts.

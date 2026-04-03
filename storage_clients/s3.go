@@ -1,3 +1,5 @@
+//go:build s3
+
 package storage_clients
 
 import (
@@ -7,19 +9,26 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+func init() {
+	RegisterUploader("s3", func(bucket, object, authType, namespace string) (interface{}, error) {
+		return NewS3Uploader(bucket, object, authType)
+	})
+}
 
 // S3Uploader handles multipart uploads to S3.
 type S3Uploader struct {
-	client *s3.S3
+	client *s3.Client
 	bucket string
 	object string
 }
@@ -33,15 +42,25 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 		return nil, fmt.Errorf("object name is required")
 	}
 
-	var creds *credentials.Credentials
+	var credsProvider aws.CredentialsProvider
 	if strings.HasPrefix(authType, "S3_ACCESS_KEYS[") && strings.HasSuffix(authType, "]") {
 		keysStr := authType[len("S3_ACCESS_KEYS[") : len(authType)-1]
-		parts := strings.SplitN(keysStr, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid S3_ACCESS_KEYS format, expected ACCESS_KEY:SECRET_KEY")
+		parts := strings.Split(keysStr, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			return nil, fmt.Errorf("invalid S3_ACCESS_KEYS format, expected ACCESS_KEY:SECRET_KEY or ACCESS_KEY:SECRET_KEY:SESSION_TOKEN")
 		}
-		creds = credentials.NewStaticCredentials(parts[0], parts[1], "")
-		log.Printf("Using explicit S3 access keys")
+		
+		accessKey := parts[0]
+		secretKey := parts[1]
+		sessionToken := ""
+		if len(parts) == 3 {
+			sessionToken = parts[2]
+			log.Printf("Using explicit S3 access keys with session token")
+		} else {
+			log.Printf("Using explicit S3 access keys")
+		}
+		
+		credsProvider = credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
 	} else {
 		return nil, fmt.Errorf("only S3_ACCESS_KEYS authentication is supported for S3")
 	}
@@ -54,15 +73,11 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 		}
 	}
 
-	awsCfg := aws.NewConfig().WithRegion(region).WithCredentials(creds)
-
-	sess, err := session.NewSession(awsCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AWS session: %v", err)
-	}
-
-	client := s3.New(sess)
-	log.Printf("S3 client created successfully for bucket: %s, object: %s, region: %s", bucket, object, region)
+	client := s3.New(s3.Options{
+		Region:      region,
+		Credentials: credsProvider,
+	})
+	log.Printf("S3 (v2 minimal) client created successfully for bucket: %s, object: %s, region: %s", bucket, object, region)
 
 	return &S3Uploader{
 		client: client,
@@ -73,14 +88,14 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 
 func (u *S3Uploader) Initiate(ctx context.Context) (string, error) {
 	log.Printf("Initiating multipart upload for bucket: %s, object: %s", u.bucket, u.object)
-	req := &s3.CreateMultipartUploadInput{
+	input := &s3.CreateMultipartUploadInput{
 		Bucket: aws.String(u.bucket),
 		Key:    aws.String(u.object),
 	}
 
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		resp, err := u.client.CreateMultipartUploadWithContext(ctx, req)
+		resp, err := u.client.CreateMultipartUpload(ctx, input)
 		if err == nil {
 			uploadID := *resp.UploadId
 			log.Printf("Successfully initiated multipart upload with ID: %s", uploadID)
@@ -106,20 +121,28 @@ func (u *S3Uploader) Initiate(ctx context.Context) (string, error) {
 func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		req := &s3.UploadPartInput{
+		input := &s3.UploadPartInput{
 			Bucket:        aws.String(u.bucket),
 			Key:           aws.String(u.object),
 			UploadId:      aws.String(uploadID),
-			PartNumber:    aws.Int64(int64(partNumber)),
+			PartNumber:    aws.Int32(int32(partNumber)),
 			ContentLength: aws.Int64(int64(len(data))),
 			Body:          bytes.NewReader(data),
 		}
 
-		resp, err := u.client.UploadPartWithContext(ctx, req)
+		resp, err := u.client.UploadPart(ctx, input)
+		// Explicitly nil the body to help GC, especially if the SDK holds the request object
+		input.Body = nil 
+		
 		if err == nil {
 			if resp.ETag != nil {
-				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, *resp.ETag, len(data))
-				return *resp.ETag, nil
+				// Copy the string to ensure we don't hold onto the entire response buffer
+				etag := string([]byte(*resp.ETag))
+				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, etag, len(data))
+				// Clear body to help GC
+				input.Body = nil
+				runtime.GC() 
+				return etag, nil
 			}
 			lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
 		} else {
@@ -150,26 +173,26 @@ func (u *S3Uploader) Complete(ctx context.Context, uploadID string, etags map[in
 	}
 	sort.Ints(partNums)
 
-	var completedParts []*s3.CompletedPart
+	var completedParts []types.CompletedPart
 	for _, partNum := range partNums {
-		completedParts = append(completedParts, &s3.CompletedPart{
-			PartNumber: aws.Int64(int64(partNum)),
+		completedParts = append(completedParts, types.CompletedPart{
+			PartNumber: aws.Int32(int32(partNum)),
 			ETag:       aws.String(etags[partNum]),
 		})
 	}
 
-	req := &s3.CompleteMultipartUploadInput{
+	input := &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(u.bucket),
 		Key:      aws.String(u.object),
 		UploadId: aws.String(uploadID),
-		MultipartUpload: &s3.CompletedMultipartUpload{
+		MultipartUpload: &types.CompletedMultipartUpload{
 			Parts: completedParts,
 		},
 	}
 
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		_, err := u.client.CompleteMultipartUploadWithContext(ctx, req)
+		_, err := u.client.CompleteMultipartUpload(ctx, input)
 		if err == nil {
 			log.Printf("Successfully completed multipart upload %s", uploadID)
 			return nil
@@ -196,14 +219,15 @@ func (u *S3Uploader) PutObject(ctx context.Context, data []byte) error {
 
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		req := &s3.PutObjectInput{
+		input := &s3.PutObjectInput{
 			Bucket:        aws.String(u.bucket),
 			Key:           aws.String(u.object),
 			ContentLength: aws.Int64(int64(len(data))),
 			Body:          bytes.NewReader(data),
 		}
 
-		_, err := u.client.PutObjectWithContext(ctx, req)
+		_, err := u.client.PutObject(ctx, input)
+		input.Body = nil
 		if err == nil {
 			log.Printf("Successfully put object %s", u.object)
 			return nil
@@ -228,7 +252,7 @@ func (u *S3Uploader) PutObject(ctx context.Context, data []byte) error {
 func (u *S3Uploader) Abort(ctx context.Context, uploadID string) error {
 	log.Printf("Aborting multipart upload %s", uploadID)
 
-	req := &s3.AbortMultipartUploadInput{
+	input := &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(u.bucket),
 		Key:      aws.String(u.object),
 		UploadId: aws.String(uploadID),
@@ -236,7 +260,7 @@ func (u *S3Uploader) Abort(ctx context.Context, uploadID string) error {
 
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		_, err := u.client.AbortMultipartUploadWithContext(ctx, req)
+		_, err := u.client.AbortMultipartUpload(ctx, input)
 		if err == nil {
 			log.Printf("Successfully aborted multipart upload %s", uploadID)
 			return nil
@@ -263,7 +287,6 @@ func (u *S3Uploader) Abort(ctx context.Context, uploadID string) error {
 }
 
 // GetObjectRange retrieves a specific byte range from an object in S3
-// This can be used to emulate seek operations by reading specific parts of an object
 func (u *S3Uploader) GetObjectRange(ctx context.Context, startByte, endByte int64) ([]byte, error) {
 	if startByte < 0 {
 		return nil, fmt.Errorf("start byte must be non-negative")
@@ -275,13 +298,13 @@ func (u *S3Uploader) GetObjectRange(ctx context.Context, startByte, endByte int6
 	rangeHeader := fmt.Sprintf("bytes=%d-%d", startByte, endByte)
 	log.Printf("Getting object range: %s for object %s", rangeHeader, u.object)
 
-	req := &s3.GetObjectInput{
+	input := &s3.GetObjectInput{
 		Bucket: aws.String(u.bucket),
 		Key:    aws.String(u.object),
 		Range:  aws.String(rangeHeader),
 	}
 
-	resp, err := u.client.GetObjectWithContext(ctx, req)
+	resp, err := u.client.GetObject(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object range: %v", err)
 	}
@@ -295,3 +318,4 @@ func (u *S3Uploader) GetObjectRange(ctx context.Context, startByte, endByte int6
 	log.Printf("Successfully retrieved %d bytes from object range", len(data))
 	return data, nil
 }
+

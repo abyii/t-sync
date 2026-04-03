@@ -18,6 +18,8 @@ func main() {
 
 	log.Printf("Source Directory: %s\n", cfg.Source)
 	log.Printf("Destination: %s\n", cfg.Destination)
+    log.Printf("Part size in MB: %d\n", cfg.MinPartSize/1024/1024)
+    log.Printf("Max parts in memory: %d\n", cfg.MaxPartsInMemory)
 
 	info, err := os.Stat(cfg.Source)
 	if err != nil {
