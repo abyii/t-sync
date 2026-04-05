@@ -235,7 +235,7 @@ func (u *OCIUploader) PutObject(ctx context.Context, data []byte) error {
 			PutObjectBody: io.NopCloser(bytes.NewReader(data)),
 		}
 
-		resp, err := u.client.PutObject(ctx, req)
+		_, err := u.client.PutObject(ctx, req)
 		req.PutObjectBody = nil
 		if err == nil {
 			log.Printf("Successfully put object %s", u.object)
