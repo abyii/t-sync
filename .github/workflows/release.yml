@@ -15,14 +15,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         variant: [s3-only, oci-only, full]
         include:
           # Linux AMD64
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
-          # Linux ARM64 (Requested)
+          # Linux ARM64
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
@@ -30,7 +29,11 @@ jobs:
           - os: windows-latest
             goos: windows
             goarch: amd64
-          # macOS Apple Silicon (ARM64)
+          # macOS Intel
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          # macOS Apple Silicon
           - os: macos-latest
             goos: darwin
             goarch: arm64
@@ -68,6 +71,7 @@ jobs:
             BINARY_NAME="${BINARY_NAME}.exe"
           fi
           
+          mkdir -p out
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build -v -tags "${{ steps.tags.outputs.tags }}" \
           -ldflags="-s -w" \
@@ -80,6 +84,7 @@ jobs:
         with:
           files: ${{ env.BINARY_PATH }}
           args: --best --lzma
+          strip: false
         continue-on-error: true
 
       - name: Upload Artifacts
