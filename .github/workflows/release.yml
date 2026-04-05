@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.variant }} for ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -15,12 +18,19 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         variant: [s3-only, oci-only, full]
         include:
+          # Linux AMD64
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
+          # Linux ARM64 (Requested)
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          # Windows AMD64
           - os: windows-latest
             goos: windows
             goarch: amd64
+          # macOS Apple Silicon (ARM64)
           - os: macos-latest
             goos: darwin
             goarch: arm64
@@ -70,8 +80,6 @@ jobs:
         with:
           files: ${{ env.BINARY_PATH }}
           args: --best --lzma
-        # UPX sometimes fails on Darwin ARM64 or internal SDK structures, 
-        # so we continue even if compression fails for a specific binary
         continue-on-error: true
 
       - name: Upload Artifacts
