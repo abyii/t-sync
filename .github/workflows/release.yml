@@ -11,32 +11,17 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.variant }} for ${{ matrix.goos }}/${{ matrix.goarch }}
-    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.variant }} for ${{ matrix.platform.goos }}/${{ matrix.platform.goarch }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       matrix:
         variant: [s3-only, oci-only, full]
-        include:
-          # Linux AMD64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          # Linux ARM64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: arm64
-          # Windows AMD64
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-          # macOS Intel
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-          # macOS Apple Silicon
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
+        platform:
+          - { os: ubuntu-latest, goos: linux, goarch: amd64 }
+          - { os: ubuntu-latest, goos: linux, goarch: arm64 }
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+          - { os: macos-latest, goos: darwin, goarch: amd64 }
+          - { os: macos-latest, goos: darwin, goarch: arm64 }
     
     steps:
       - name: Checkout code
@@ -66,13 +51,13 @@ jobs:
       - name: Build Binary
         shell: bash
         run: |
-          BINARY_NAME="t-sync-${{ steps.tags.outputs.suffix }}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" == "windows" ]; then
+          BINARY_NAME="t-sync-${{ steps.tags.outputs.suffix }}-${{ matrix.platform.goos }}-${{ matrix.platform.goarch }}"
+          if [ "${{ matrix.platform.goos }}" == "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
           fi
           
           mkdir -p out
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          CGO_ENABLED=0 GOOS=${{ matrix.platform.goos }} GOARCH=${{ matrix.platform.goarch }} \
           go build -v -tags "${{ steps.tags.outputs.tags }}" \
           -ldflags="-s -w" \
           -o "out/${BINARY_NAME}" .
@@ -90,7 +75,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: t-sync-${{ matrix.variant }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: t-sync-${{ matrix.variant }}-${{ matrix.platform.goos }}-${{ matrix.platform.goarch }}
           path: ${{ env.BINARY_PATH }}
 
   release:
