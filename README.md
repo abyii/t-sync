@@ -9,15 +9,21 @@ To download/reconcile go package dependencies as a separate step, You can simply
 
 #### Build Commands
 ```
-// for Linux x86:
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../bin/t-sync
-upx ../bin/t-sync
+// for Linux amd64:
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags oci -ldflags="-s -w" -o ../bin/t-sync-oci
+upx ../bin/t-sync-oci
+
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags s3 -ldflags="-s -w" -o ../bin/t-sync-s3
+upx ../bin/t-sync-s3
 ```
 
 ```
 // for Linux arm64:
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../bin/t-sync
-upx ../bin/t-sync
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags oci -ldflags="-s -w" -o ../bin/t-sync-oci
+upx ../bin/t-sync-oci
+
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags s3 -ldflags="-s -w" -o ../bin/t-sync-s3
+upx ../bin/t-sync-s3
 ```
 
 ### Exit Codes
