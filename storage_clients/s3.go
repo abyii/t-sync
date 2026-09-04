@@ -15,13 +15,14 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 func init() {
-	RegisterUploader("s3", func(bucket, object, authType, namespace string) (interface{}, error) {
+	RegisterUploader("s3", func(bucket, object, authType, namespace string) (any, error) {
 		return NewS3Uploader(bucket, object, authType)
 	})
 }
@@ -42,14 +43,28 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 		return nil, fmt.Errorf("object name is required")
 	}
 
-	var credsProvider aws.CredentialsProvider
-	if strings.HasPrefix(authType, "S3_ACCESS_KEYS[") && strings.HasSuffix(authType, "]") {
+	ctx := context.Background()
+	var configOpts []func(*config.LoadOptions) error
+
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if region != "" {
+		configOpts = append(configOpts, config.WithRegion(region))
+	} else {
+		// Enable resolving region from EC2 IMDS if not specified via environment
+		configOpts = append(configOpts, config.WithEC2IMDSRegion())
+	}
+
+	switch {
+	case strings.HasPrefix(authType, "S3_ACCESS_KEYS[") && strings.HasSuffix(authType, "]"):
 		keysStr := authType[len("S3_ACCESS_KEYS[") : len(authType)-1]
 		parts := strings.Split(keysStr, ":")
 		if len(parts) < 2 || len(parts) > 3 {
 			return nil, fmt.Errorf("invalid S3_ACCESS_KEYS format, expected ACCESS_KEY:SECRET_KEY or ACCESS_KEY:SECRET_KEY:SESSION_TOKEN")
 		}
-		
+
 		accessKey := parts[0]
 		secretKey := parts[1]
 		sessionToken := ""
@@ -59,25 +74,41 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 		} else {
 			log.Printf("Using explicit S3 access keys")
 		}
-		
-		credsProvider = credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
-	} else {
-		return nil, fmt.Errorf("only S3_ACCESS_KEYS authentication is supported for S3")
-	}
 
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = os.Getenv("AWS_DEFAULT_REGION")
-		if region == "" {
-			region = "ap-south-1"
+		configOpts = append(configOpts, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken),
+		))
+
+	case strings.HasPrefix(authType, "AWS_CONFIG_FILE"):
+		profile := "default"
+		if strings.Contains(authType, "[") && strings.Contains(authType, "]") {
+			start := strings.Index(authType, "[")
+			end := strings.Index(authType, "]")
+			if start != -1 && end != -1 && end > start {
+				profile = authType[start+1 : end]
+			}
 		}
+		log.Printf("Using AWS config file with profile: %s", profile)
+		configOpts = append(configOpts, config.WithSharedConfigProfile(profile))
+
+	case authType == "AWS_DEFAULT" || authType == "":
+		log.Printf("Using default AWS credential chain (supports env, config, EKS, ECS, EC2 IMDS)")
+
+	default:
+		return nil, fmt.Errorf("unsupported S3 authentication type: %s", authType)
 	}
 
-	client := s3.New(s3.Options{
-		Region:      region,
-		Credentials: credsProvider,
-	})
-	log.Printf("S3 (v2 minimal) client created successfully for bucket: %s, object: %s, region: %s", bucket, object, region)
+	cfg, err := config.LoadDefaultConfig(ctx, configOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS configuration: %v", err)
+	}
+
+	if cfg.Region == "" {
+		cfg.Region = "ap-south-1"
+	}
+
+	client := s3.NewFromConfig(cfg)
+	log.Printf("S3 client created successfully for bucket: %s, object: %s, region: %s", bucket, object, cfg.Region)
 
 	return &S3Uploader{
 		client: client,
@@ -132,8 +163,8 @@ func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber
 
 		resp, err := u.client.UploadPart(ctx, input)
 		// Explicitly nil the body to help GC, especially if the SDK holds the request object
-		input.Body = nil 
-		
+		input.Body = nil
+
 		if err == nil {
 			if resp.ETag != nil {
 				// Copy the string to ensure we don't hold onto the entire response buffer
@@ -141,7 +172,7 @@ func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber
 				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, etag, len(data))
 				// Clear body to help GC
 				input.Body = nil
-				runtime.GC() 
+				runtime.GC()
 				return etag, nil
 			}
 			lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
@@ -318,4 +349,3 @@ func (u *S3Uploader) GetObjectRange(ctx context.Context, startByte, endByte int6
 	log.Printf("Successfully retrieved %d bytes from object range", len(data))
 	return data, nil
 }
-

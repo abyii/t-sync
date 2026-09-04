@@ -64,10 +64,15 @@ func getCompressionLevelForFile(filename string, defaultLevel int) int {
 const (
     KiB = 1024
 
-    // auth types
+    // auth types - OCI
     AuthTypeOCIConfigFile       = "OCI_CONFIG_FILE"
     AuthTypeOKEWorkloadIdentity = "OKE_WORKLOAD_IDENTITY"
     AuthTypeInstancePrincipal   = "INSTANCE_PRINCIPAL"
+
+    // auth types - S3
+    AuthTypeAWSDefault    = "AWS_DEFAULT"
+    AuthTypeAWSConfigFile = "AWS_CONFIG_FILE"
+    AuthTypeS3AccessKeys  = "S3_ACCESS_KEYS"
 
     // exit codes mapped to valid 8-bit range (0-255)
     ExitCodeInvalidParameters    = 40 // Bad Parameters
@@ -80,25 +85,53 @@ const (
 )
 
 // isValidAuthType checks whether the provided auth-type string matches
-// one of the supported patterns:
-//   - OCI_CONFIG_FILE or OCI_CONFIG_FILE[PROFILE]
-//   - OKE_WORKLOAD_IDENTITY
-//   - INSTANCE_PRINCIPAL
-func isValidAuthType(authType string) bool {
-    switch {
-    case strings.HasPrefix(authType, AuthTypeOCIConfigFile):
-        if authType == AuthTypeOCIConfigFile {
+// supported patterns for the specified provider:
+//   - OCI: OCI_CONFIG_FILE, OCI_CONFIG_FILE[PROFILE], OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL
+//   - S3: "" (defaults to AWS_DEFAULT), AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE],
+//         S3_ACCESS_KEYS[AK:SK], S3_ACCESS_KEYS[AK:SK:TOKEN]
+func isValidAuthType(provider, authType string) bool {
+    switch provider {
+    case "oci":
+        switch {
+        case strings.HasPrefix(authType, AuthTypeOCIConfigFile):
+            if authType == AuthTypeOCIConfigFile {
+                return true
+            }
+            if strings.HasPrefix(authType, AuthTypeOCIConfigFile+"[") && strings.HasSuffix(authType, "]") {
+                profile := authType[len(AuthTypeOCIConfigFile)+1 : len(authType)-1]
+                return strings.TrimSpace(profile) != ""
+            }
+        case authType == AuthTypeOKEWorkloadIdentity:
+            return true
+        case authType == AuthTypeInstancePrincipal:
             return true
         }
-        if strings.HasPrefix(authType, AuthTypeOCIConfigFile+"[") && strings.HasSuffix(authType, "]") {
+        return false
+
+    case "s3":
+        switch {
+        case authType == "" || authType == AuthTypeAWSDefault:
             return true
+        case strings.HasPrefix(authType, AuthTypeAWSConfigFile):
+            if authType == AuthTypeAWSConfigFile {
+                return true
+            }
+            if strings.HasPrefix(authType, AuthTypeAWSConfigFile+"[") && strings.HasSuffix(authType, "]") {
+                profile := authType[len(AuthTypeAWSConfigFile)+1 : len(authType)-1]
+                return strings.TrimSpace(profile) != ""
+            }
+        case strings.HasPrefix(authType, AuthTypeS3AccessKeys+"[") && strings.HasSuffix(authType, "]"):
+            keysStr := authType[len(AuthTypeS3AccessKeys)+1 : len(authType)-1]
+            parts := strings.Split(keysStr, ":")
+            if (len(parts) == 2 || len(parts) == 3) && parts[0] != "" && parts[1] != "" {
+                return true
+            }
         }
-    case authType == AuthTypeOKEWorkloadIdentity:
-        return true
-    case authType == AuthTypeInstancePrincipal:
-        return true
+        return false
+
+    default:
+        return false
     }
-    return false
 }
 
 func ParseDestURL(dest *url.URL) (*DestDetails, error) {
@@ -138,7 +171,7 @@ func ParseFlags() (*Config, error) {
     flag.IntVar(&cfg.CompressionLevel, "compression-level", DefaultCompressionLevel, "Compression level (0-9).")
 
     // Auth incase of object storage
-    flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (e.g., OCI_CONFIG_FILE, OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL, S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]).")
+    flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (OCI: OCI_CONFIG_FILE, OCI_CONFIG_FILE[PROFILE], OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL; S3: AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE], S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]).")
 
     // multipart upload config
     flag.IntVar(&cfg.MaxPartsInMemory, "max-parts-in-memory", DefaultMaxPartsInMemory, "Maximum number of parts to hold in memory before applying backpressure.")
@@ -174,14 +207,17 @@ func ParseFlags() (*Config, error) {
 
     switch destURL.Scheme {
     case "oci":
-        if ok := isValidAuthType(cfg.AuthType); !ok {
+        if !isValidAuthType(destURL.Scheme, cfg.AuthType) {
             flag.Usage()
             return nil, fmt.Errorf("unsupported auth-type for oci: %s", cfg.AuthType)
         }
     case "s3":
-        if !strings.HasPrefix(cfg.AuthType, "S3_ACCESS_KEYS[") || !strings.HasSuffix(cfg.AuthType, "]") || !strings.Contains(cfg.AuthType, ":") {
+        if !isValidAuthType(destURL.Scheme, cfg.AuthType) {
             flag.Usage()
-            return nil, fmt.Errorf("unsupported auth-type for s3: %s, expected S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]", cfg.AuthType)
+            return nil, fmt.Errorf("unsupported auth-type for s3: %s, expected AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE], S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]", cfg.AuthType)
+        }
+        if cfg.AuthType == "" {
+            cfg.AuthType = AuthTypeAWSDefault
         }
     }
 

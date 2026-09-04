@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	RegisterUploader("oci", func(bucket, object, authType, namespace string) (interface{}, error) {
+	RegisterUploader("oci", func(bucket, object, authType, namespace string) (any, error) {
 		return NewOCIUploader(namespace, bucket, object, authType)
 	})
 }
@@ -99,9 +99,7 @@ func (u *OCIUploader) Initiate(ctx context.Context) (string, error) {
 	req := objectstorage.CreateMultipartUploadRequest{
 		NamespaceName: &u.namespace,
 		BucketName:    &u.bucket,
-		CreateMultipartUploadDetails: objectstorage.CreateMultipartUploadDetails{
-			Object: &u.object,
-		},
+		Object:        &u.object,
 	}
 
 	var lastErr error
@@ -139,7 +137,7 @@ func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumbe
 			ObjectName:     &u.object,
 			UploadId:       &uploadID,
 			UploadPartNum:  &partNumber,
-			ContentLength:  common.Int64(int64(len(data))),
+			ContentLength:  new(int64(len(data))),
 			UploadPartBody: io.NopCloser(bytes.NewReader(data)),
 		}
 
@@ -162,7 +160,7 @@ func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumbe
 		if attempt < 3 {
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s
 			log.Printf("Attempt %d failed for part %d: %v. Retrying in %v...", attempt, partNumber, lastErr, backoff)
-			
+
 			select {
 			case <-ctx.Done():
 				return "", fmt.Errorf("context cancelled while waiting to retry upload part %d: %v", partNumber, ctx.Err())
@@ -181,8 +179,8 @@ func (u *OCIUploader) Complete(ctx context.Context, uploadID string, etags map[i
 	parts := make([]objectstorage.CommitMultipartUploadPartDetails, 0, len(etags))
 	for partNum, etag := range etags {
 		parts = append(parts, objectstorage.CommitMultipartUploadPartDetails{
-			PartNum: common.Int(partNum),
-			Etag:    common.String(etag),
+			PartNum: new(partNum),
+			Etag:    new(etag),
 		})
 	}
 
@@ -191,9 +189,7 @@ func (u *OCIUploader) Complete(ctx context.Context, uploadID string, etags map[i
 		BucketName:    &u.bucket,
 		ObjectName:    &u.object,
 		UploadId:      &uploadID,
-		CommitMultipartUploadDetails: objectstorage.CommitMultipartUploadDetails{
-			PartsToCommit: parts,
-		},
+		PartsToCommit: parts,
 	}
 
 	var lastErr error
@@ -230,7 +226,7 @@ func (u *OCIUploader) PutObject(ctx context.Context, data []byte) error {
 			NamespaceName: &u.namespace,
 			BucketName:    &u.bucket,
 			ObjectName:    &u.object,
-			ContentLength: common.Int64(int64(len(data))),
+			ContentLength: new(int64(len(data))),
 			// Re-create the reader for each attempt in case the payload was partially read
 			PutObjectBody: io.NopCloser(bytes.NewReader(data)),
 		}

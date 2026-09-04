@@ -47,3 +47,25 @@ Zipping/Deflate is a CPU-intensive operation. To limit the CPU usage, you can us
 systemd-run --scope -p CPUQuota=50% t-sync -s "../sample_data_size1" -d "oci://bmcx0flrsnis@test-bucket-for-poc/output_cpu_limit.zip" -auth-type OCI_CONFIG_FILE
 ```
 
+### Authentication Types
+
+#### S3 (`s3://bucket/key`)
+* **`AWS_DEFAULT`** *(default when `-auth-type` is omitted)*: Uses the standard AWS SDK credential resolution chain (environment variables $\rightarrow$ shared configuration/profile $\rightarrow$ container/web identity $\rightarrow$ EC2 IMDS / Instance Profile). Automatically resolves and auto-rotates credentials on EC2 instances:
+  ```bash
+  t-sync -s "./data" -d "s3://my-bucket/backup.zip"
+  ```
+* **`AWS_CONFIG_FILE`** or **`AWS_CONFIG_FILE[PROFILE]`**: Uses local AWS shared configuration and credentials (`~/.aws/credentials`, `~/.aws/config`), with optional named profile:
+  ```bash
+  t-sync -s "./data" -d "s3://my-bucket/backup.zip" -auth-type "AWS_CONFIG_FILE[production]"
+  ```
+* **`S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY]`** or **`S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]`**: Explicit static keys:
+  ```bash
+  t-sync -s "./data" -d "s3://my-bucket/backup.zip" -auth-type "S3_ACCESS_KEYS[AKIAIOSFODNN7EXAMPLE:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY]"
+  ```
+
+#### OCI (`oci://namespace@bucket/key`)
+* **`OCI_CONFIG_FILE`** or **`OCI_CONFIG_FILE[PROFILE]`**: Uses `~/.oci/config` profile (default: `DEFAULT`).
+* **`INSTANCE_PRINCIPAL`**: Uses OCI Compute instance principal identity.
+* **`OKE_WORKLOAD_IDENTITY`**: Uses Oracle Container Engine for Kubernetes (OKE) workload identity.
+
+
