@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -29,9 +30,10 @@ func init() {
 
 // S3Uploader handles multipart uploads to S3.
 type S3Uploader struct {
-	client *s3.Client
-	bucket string
-	object string
+	client        *s3.Client
+	bucket        string
+	object        string
+	partChecksums sync.Map
 }
 
 // NewS3Uploader creates a new S3Uploader.
@@ -119,9 +121,11 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 
 func (u *S3Uploader) Initiate(ctx context.Context) (string, error) {
 	log.Printf("Initiating multipart upload for bucket: %s, object: %s", u.bucket, u.object)
+	u.partChecksums.Clear()
 	input := &s3.CreateMultipartUploadInput{
-		Bucket: aws.String(u.bucket),
-		Key:    aws.String(u.object),
+		Bucket:            aws.String(u.bucket),
+		Key:               aws.String(u.object),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
 	}
 
 	var lastErr error
@@ -153,12 +157,13 @@ func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		input := &s3.UploadPartInput{
-			Bucket:        aws.String(u.bucket),
-			Key:           aws.String(u.object),
-			UploadId:      aws.String(uploadID),
-			PartNumber:    aws.Int32(int32(partNumber)),
-			ContentLength: aws.Int64(int64(len(data))),
-			Body:          bytes.NewReader(data),
+			Bucket:            aws.String(u.bucket),
+			Key:               aws.String(u.object),
+			UploadId:          aws.String(uploadID),
+			PartNumber:        aws.Int32(int32(partNumber)),
+			ContentLength:     aws.Int64(int64(len(data))),
+			Body:              bytes.NewReader(data),
+			ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
 		}
 
 		resp, err := u.client.UploadPart(ctx, input)
@@ -166,7 +171,12 @@ func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber
 		input.Body = nil
 
 		if err == nil {
-			if resp.ETag != nil {
+			if resp.ETag == nil {
+				lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
+			} else if resp.ChecksumCRC64NVME == nil {
+				lastErr = fmt.Errorf("server did not return CRC64NVME checksum for part %d", partNumber)
+			} else {
+				u.partChecksums.Store(partNumber, *resp.ChecksumCRC64NVME)
 				// Copy the string to ensure we don't hold onto the entire response buffer
 				etag := string([]byte(*resp.ETag))
 				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, etag, len(data))
@@ -175,7 +185,6 @@ func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber
 				runtime.GC()
 				return etag, nil
 			}
-			lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
 		} else {
 			lastErr = err
 		}
@@ -206,10 +215,14 @@ func (u *S3Uploader) Complete(ctx context.Context, uploadID string, etags map[in
 
 	var completedParts []types.CompletedPart
 	for _, partNum := range partNums {
-		completedParts = append(completedParts, types.CompletedPart{
+		cp := types.CompletedPart{
 			PartNumber: aws.Int32(int32(partNum)),
 			ETag:       aws.String(etags[partNum]),
-		})
+		}
+		if cs, ok := u.partChecksums.Load(partNum); ok {
+			cp.ChecksumCRC64NVME = aws.String(cs.(string))
+		}
+		completedParts = append(completedParts, cp)
 	}
 
 	input := &s3.CompleteMultipartUploadInput{
@@ -251,10 +264,11 @@ func (u *S3Uploader) PutObject(ctx context.Context, data []byte) error {
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		input := &s3.PutObjectInput{
-			Bucket:        aws.String(u.bucket),
-			Key:           aws.String(u.object),
-			ContentLength: aws.Int64(int64(len(data))),
-			Body:          bytes.NewReader(data),
+			Bucket:            aws.String(u.bucket),
+			Key:               aws.String(u.object),
+			ContentLength:     aws.Int64(int64(len(data))),
+			Body:              bytes.NewReader(data),
+			ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
 		}
 
 		_, err := u.client.PutObject(ctx, input)
@@ -282,6 +296,7 @@ func (u *S3Uploader) PutObject(ctx context.Context, data []byte) error {
 
 func (u *S3Uploader) Abort(ctx context.Context, uploadID string) error {
 	log.Printf("Aborting multipart upload %s", uploadID)
+	u.partChecksums.Clear()
 
 	input := &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(u.bucket),
