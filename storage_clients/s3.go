@@ -10,7 +10,7 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -211,7 +211,7 @@ func (u *S3Uploader) Complete(ctx context.Context, uploadID string, etags map[in
 	for partNum := range etags {
 		partNums = append(partNums, partNum)
 	}
-	sort.Ints(partNums)
+	slices.Sort(partNums)
 
 	var completedParts []types.CompletedPart
 	for _, partNum := range partNums {
