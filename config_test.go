@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/url"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -46,7 +49,7 @@ func TestIsValidAuthType_OCI(t *testing.T) {
 		{"OCI_CONFIG_FILE with empty profile", "OCI_CONFIG_FILE[]", false},
 		{"OKE_WORKLOAD_IDENTITY", AuthTypeOKEWorkloadIdentity, true},
 		{"INSTANCE_PRINCIPAL", AuthTypeInstancePrincipal, true},
-		{"empty string on OCI should fail", "", false},
+		{"empty string on OCI uses SDK default provider", "", true},
 		{"S3 auth type on OCI should fail", AuthTypeAWSDefault, false},
 		{"invalid auth type", "INVALID", false},
 	}
@@ -58,5 +61,40 @@ func TestIsValidAuthType_OCI(t *testing.T) {
 				t.Errorf("isValidAuthType(\"oci\", %q) = %v, want %v", tt.authType, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestFileURLToPath(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{"file:///var/backups/out.zip", "/var/backups/out.zip"},
+		{"file://localhost/var/out.zip", "/var/out.zip"},
+		{"file://rel/out.zip", "rel/out.zip"},
+		{"file:rel/out.zip", "rel/out.zip"},
+	}
+	if runtime.GOOS == "windows" {
+		tests = append(tests, struct{ raw, want string }{"file:///C:/dir/out.zip", "C:/dir/out.zip"})
+	}
+	for _, tt := range tests {
+		u, err := url.Parse(tt.raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := fileURLToPath(u), filepath.FromSlash(tt.want); got != want {
+			t.Errorf("fileURLToPath(%q) = %q, want %q", tt.raw, got, want)
+		}
+	}
+}
+
+func TestCompressionLevelExtensionIsCaseInsensitive(t *testing.T) {
+	for _, name := range []string{"a.jpg", "PHOTO.JPG", "dir/Backup.Zip"} {
+		if got := getCompressionLevelForFile(name, 6); got != 0 {
+			t.Errorf("getCompressionLevelForFile(%q) = %d, want 0", name, got)
+		}
+	}
+	if got := getCompressionLevelForFile("notes.TXT", 6); got != 6 {
+		t.Errorf("text file level = %d, want 6", got)
 	}
 }

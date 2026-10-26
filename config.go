@@ -6,223 +6,244 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // this holds all the command line config you can pass to t-sync
 type Config struct {
-    Source           string
-    Destination      *url.URL
-    CompressionLevel int
-    AuthType         string
-    MaxPartsInMemory int
-    MinPartSize      int // in bytes
-    Password         string
-    IgnoreFile       string
+	Source           string
+	Destination      *url.URL
+	CompressionLevel int
+	AuthType         string
+	MaxPartsInMemory int
+	MinPartSize      int // in bytes
+	Password         string
+	IgnoreFile       string
 }
 
 // DestDetails holds parsed details from the destination URL.
 type DestDetails struct {
-    Provider  string
-    Bucket    string
-    Namespace string
-    Key       string
+	Provider  string
+	Bucket    string
+	Namespace string
+	Key       string
 }
 
 var compressionLevelByExtension = map[string]int{
-    ".zip":  0,
-    ".gz":   0,
-    ".bz2":  0,
-    ".rar":  0,
-    ".7z":   0,
-    ".jpg":  0,
-    ".jpeg": 0,
-    ".png":  0,
-    ".gif":  0,
-    ".mp4":  0,
-    ".mkv":  0,
-    ".avi":  0,
-    ".mov":  0,
-    ".mp3":  0,
-    ".flac": 0,
+	".zip":  0,
+	".gz":   0,
+	".bz2":  0,
+	".rar":  0,
+	".7z":   0,
+	".jpg":  0,
+	".jpeg": 0,
+	".png":  0,
+	".gif":  0,
+	".mp4":  0,
+	".mkv":  0,
+	".avi":  0,
+	".mov":  0,
+	".mp3":  0,
+	".flac": 0,
 }
 
 const (
-    DefaultCompressionLevel = 6
-    DefaultMinPartSizeInMiB = 10
-    DefaultMaxPartsInMemory = 10
+	DefaultCompressionLevel = 6
+	DefaultMinPartSizeInMiB = 10
+	DefaultMaxPartsInMemory = 10
 )
 
 func getCompressionLevelForFile(filename string, defaultLevel int) int {
-    ext := filepath.Ext(filename)
-    if level, ok := compressionLevelByExtension[ext]; ok {
-        return level
-    }
-    return defaultLevel
+	ext := strings.ToLower(filepath.Ext(filename))
+	if level, ok := compressionLevelByExtension[ext]; ok {
+		return level
+	}
+	return defaultLevel
 }
 
 const (
-    KiB = 1024
+	KiB = 1024
 
-    // auth types - OCI
-    AuthTypeOCIConfigFile       = "OCI_CONFIG_FILE"
-    AuthTypeOKEWorkloadIdentity = "OKE_WORKLOAD_IDENTITY"
-    AuthTypeInstancePrincipal   = "INSTANCE_PRINCIPAL"
+	// auth types - OCI
+	AuthTypeOCIConfigFile       = "OCI_CONFIG_FILE"
+	AuthTypeOKEWorkloadIdentity = "OKE_WORKLOAD_IDENTITY"
+	AuthTypeInstancePrincipal   = "INSTANCE_PRINCIPAL"
 
-    // auth types - S3
-    AuthTypeAWSDefault    = "AWS_DEFAULT"
-    AuthTypeAWSConfigFile = "AWS_CONFIG_FILE"
-    AuthTypeS3AccessKeys  = "S3_ACCESS_KEYS"
+	// auth types - S3
+	AuthTypeAWSDefault    = "AWS_DEFAULT"
+	AuthTypeAWSConfigFile = "AWS_CONFIG_FILE"
+	AuthTypeS3AccessKeys  = "S3_ACCESS_KEYS"
 
-    // exit codes mapped to valid 8-bit range (0-255)
-    ExitCodeInvalidParameters    = 40 // Bad Parameters
-    ExitCodeAuthenticationFailed = 41 // Authentication Failed
-    ExitCodeSourceDirNotFound    = 44 // Source directory not found
-    ExitCodeInternalCodeError    = 50 // Internal Code Error
-    ExitCodeUploadFailed         = 52 // Upload Failed
-    ExitCodeUploaderClientFailed = 53 // Client Failed
-    ExitCodeZipArchiverFailed    = 54 // Zip Failed
+	// exit codes mapped to valid 8-bit range (0-255)
+	ExitCodeInvalidParameters    = 40 // Bad Parameters
+	ExitCodeAuthenticationFailed = 41 // Authentication Failed
+	ExitCodeSourceDirNotFound    = 44 // Source directory not found
+	ExitCodeInternalCodeError    = 50 // Internal Code Error
+	ExitCodeUploadFailed         = 52 // Upload Failed
+	ExitCodeUploaderClientFailed = 53 // Client Failed
+	ExitCodeZipArchiverFailed    = 54 // Zip Failed
 )
 
 // isValidAuthType checks whether the provided auth-type string matches
 // supported patterns for the specified provider:
-//   - OCI: OCI_CONFIG_FILE, OCI_CONFIG_FILE[PROFILE], OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL
+//   - OCI: "" (defaults to the OCI SDK default config provider), OCI_CONFIG_FILE, OCI_CONFIG_FILE[PROFILE], OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL
 //   - S3: "" (defaults to AWS_DEFAULT), AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE],
-//         S3_ACCESS_KEYS[AK:SK], S3_ACCESS_KEYS[AK:SK:TOKEN]
+//     S3_ACCESS_KEYS[AK:SK], S3_ACCESS_KEYS[AK:SK:TOKEN]
 func isValidAuthType(provider, authType string) bool {
-    switch provider {
-    case "oci":
-        switch {
-        case strings.HasPrefix(authType, AuthTypeOCIConfigFile):
-            if authType == AuthTypeOCIConfigFile {
-                return true
-            }
-            if strings.HasPrefix(authType, AuthTypeOCIConfigFile+"[") && strings.HasSuffix(authType, "]") {
-                profile := authType[len(AuthTypeOCIConfigFile)+1 : len(authType)-1]
-                return strings.TrimSpace(profile) != ""
-            }
-        case authType == AuthTypeOKEWorkloadIdentity:
-            return true
-        case authType == AuthTypeInstancePrincipal:
-            return true
-        }
-        return false
+	switch provider {
+	case "oci":
+		switch {
+		case authType == "":
+			return true
+		case strings.HasPrefix(authType, AuthTypeOCIConfigFile):
+			if authType == AuthTypeOCIConfigFile {
+				return true
+			}
+			if strings.HasPrefix(authType, AuthTypeOCIConfigFile+"[") && strings.HasSuffix(authType, "]") {
+				profile := authType[len(AuthTypeOCIConfigFile)+1 : len(authType)-1]
+				return strings.TrimSpace(profile) != ""
+			}
+		case authType == AuthTypeOKEWorkloadIdentity:
+			return true
+		case authType == AuthTypeInstancePrincipal:
+			return true
+		}
+		return false
 
-    case "s3":
-        switch {
-        case authType == "" || authType == AuthTypeAWSDefault:
-            return true
-        case strings.HasPrefix(authType, AuthTypeAWSConfigFile):
-            if authType == AuthTypeAWSConfigFile {
-                return true
-            }
-            if strings.HasPrefix(authType, AuthTypeAWSConfigFile+"[") && strings.HasSuffix(authType, "]") {
-                profile := authType[len(AuthTypeAWSConfigFile)+1 : len(authType)-1]
-                return strings.TrimSpace(profile) != ""
-            }
-        case strings.HasPrefix(authType, AuthTypeS3AccessKeys+"[") && strings.HasSuffix(authType, "]"):
-            keysStr := authType[len(AuthTypeS3AccessKeys)+1 : len(authType)-1]
-            parts := strings.Split(keysStr, ":")
-            if (len(parts) == 2 || len(parts) == 3) && parts[0] != "" && parts[1] != "" {
-                return true
-            }
-        }
-        return false
+	case "s3":
+		switch {
+		case authType == "" || authType == AuthTypeAWSDefault:
+			return true
+		case strings.HasPrefix(authType, AuthTypeAWSConfigFile):
+			if authType == AuthTypeAWSConfigFile {
+				return true
+			}
+			if strings.HasPrefix(authType, AuthTypeAWSConfigFile+"[") && strings.HasSuffix(authType, "]") {
+				profile := authType[len(AuthTypeAWSConfigFile)+1 : len(authType)-1]
+				return strings.TrimSpace(profile) != ""
+			}
+		case strings.HasPrefix(authType, AuthTypeS3AccessKeys+"[") && strings.HasSuffix(authType, "]"):
+			keysStr := authType[len(AuthTypeS3AccessKeys)+1 : len(authType)-1]
+			parts := strings.Split(keysStr, ":")
+			if (len(parts) == 2 || len(parts) == 3) && parts[0] != "" && parts[1] != "" {
+				return true
+			}
+		}
+		return false
 
-    default:
-        return false
-    }
+	default:
+		return false
+	}
 }
 
 func ParseDestURL(dest *url.URL) (*DestDetails, error) {
-    details := &DestDetails{
-        Provider: dest.Scheme,
-        Key:      strings.TrimLeft(dest.Path, "/"),
-    }
+	details := &DestDetails{
+		Provider: dest.Scheme,
+		Key:      strings.TrimLeft(dest.Path, "/"),
+	}
 
-    switch dest.Scheme {
-    case "oci":
-        if dest.User != nil {
-            details.Namespace = dest.User.Username()
-        } else {
-            return nil, errors.New("OCI destination requires namespace in the format oci://namespace@bucket/key")
-        }
-        details.Bucket = dest.Host
-    case "s3":
-        details.Bucket = dest.Host
-    case "file":
-        details.Key = strings.TrimLeft(dest.Path, "/")
-    default:
-        return nil, fmt.Errorf("unsupported destination provider: %s", dest.Scheme)
-    }
+	switch dest.Scheme {
+	case "oci":
+		if dest.User != nil {
+			details.Namespace = dest.User.Username()
+		} else {
+			return nil, errors.New("OCI destination requires namespace in the format oci://namespace@bucket/key")
+		}
+		details.Bucket = dest.Host
+	case "s3":
+		details.Bucket = dest.Host
+	case "file":
+		details.Key = fileURLToPath(dest)
+	default:
+		return nil, fmt.Errorf("unsupported destination provider: %s", dest.Scheme)
+	}
 
-    return details, nil
+	return details, nil
+}
+
+func fileURLToPath(dest *url.URL) string {
+	p := dest.Path
+	if dest.Opaque != "" {
+		p = dest.Opaque
+	} else if dest.Host != "" && dest.Host != "localhost" {
+		p = dest.Host + p
+	}
+	if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p)
 }
 
 func ParseFlags() (*Config, error) {
-    cfg := &Config{}
-    var destStr string
+	cfg := &Config{}
+	var destStr string
 
-    // source and destination configuration
-    flag.StringVar(&cfg.Source, "s", "", "Source directory to zip.")
-    flag.StringVar(&destStr, "d", "", "Destination URI (e.g., file:///path/to/file.zip, oci://namespace@bucket/key, s3://bucket/key).")
+	// source and destination configuration
+	flag.StringVar(&cfg.Source, "s", "", "Source directory to zip.")
+	flag.StringVar(&destStr, "d", "", "Destination URI (e.g., file:///path/to/file.zip, oci://namespace@bucket/key, s3://bucket/key).")
 
-    // compression level: default selected is 6 for best speed vs compression ratio tradeoff.
-    flag.IntVar(&cfg.CompressionLevel, "compression-level", DefaultCompressionLevel, "Compression level (0-9).")
+	// compression level: default selected is 6 for best speed vs compression ratio tradeoff.
+	flag.IntVar(&cfg.CompressionLevel, "compression-level", DefaultCompressionLevel, "Compression level (0-9).")
 
-    // Auth incase of object storage
-    flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (OCI: OCI_CONFIG_FILE, OCI_CONFIG_FILE[PROFILE], OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL; S3: AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE], S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]).")
+	// Auth incase of object storage
+	flag.StringVar(&cfg.AuthType, "auth-type", "", "Authentication type (OCI: OCI_CONFIG_FILE, OCI_CONFIG_FILE[PROFILE], OKE_WORKLOAD_IDENTITY, INSTANCE_PRINCIPAL, default: OCI SDK default config; S3: AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE], S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]).")
 
-    // multipart upload config
-    flag.IntVar(&cfg.MaxPartsInMemory, "max-parts-in-memory", DefaultMaxPartsInMemory, "Maximum number of parts to hold in memory before applying backpressure.")
-    flag.IntVar(&cfg.MinPartSize, "min-part-size-mb", DefaultMinPartSizeInMiB, "Minimum part size in MB for multipart uploads.")
+	// multipart upload config
+	flag.IntVar(&cfg.MaxPartsInMemory, "max-parts-in-memory", DefaultMaxPartsInMemory, "Maximum number of parts uploaded concurrently. Peak part memory is (max-parts-in-memory + 1) x part size: the parts being uploaded plus the one being filled.")
+	flag.IntVar(&cfg.MinPartSize, "min-part-size-mb", DefaultMinPartSizeInMiB, "Minimum part size in MB for multipart uploads.")
 
-    // password when zip encryption is enabled
-    flag.StringVar(&cfg.Password, "password", "", "Password for encrypting the zip file.")
+	// password when zip encryption is enabled
+	flag.StringVar(&cfg.Password, "password", "", "Password for encrypting the zip file.")
 
-    // ignore file
-    flag.StringVar(&cfg.IgnoreFile, "ignore-file", "", "Path to a file with .gitignore style patterns to ignore. File can be named '.tsyncignore'.")
+	// ignore file
+	flag.StringVar(&cfg.IgnoreFile, "ignore-file", "", "Path to a file with .gitignore style patterns to ignore. File can be named '.tsyncignore'.")
 
-    flag.Parse()
+	flag.Parse()
 
-    if cfg.Source == "" || destStr == "" {
-        flag.Usage()
-        return nil, errors.New("source and destination are required")
-    }
+	if cfg.Source == "" || destStr == "" {
+		flag.Usage()
+		return nil, errors.New("source and destination are required")
+	}
 
-    if cfg.MaxPartsInMemory <= 0 {
-        flag.Usage()
-        return nil, fmt.Errorf("max-parts-in-memory must be greater than 0")
-    }
+	if cfg.MaxPartsInMemory <= 0 {
+		flag.Usage()
+		return nil, fmt.Errorf("max-parts-in-memory must be greater than 0")
+	}
 
-    if cfg.MinPartSize < 5 {
-        flag.Usage()
-        return nil, fmt.Errorf("min-part-size-mb must be greater than 5")
-    }
+	if cfg.MinPartSize < 5 {
+		flag.Usage()
+		return nil, fmt.Errorf("min-part-size-mb must be at least 5")
+	}
 
-    destURL, err := url.Parse(destStr)
-    if err != nil {
-        return nil, fmt.Errorf("invalid destination URI: %v", err)
-    }
+	if cfg.CompressionLevel < 0 || cfg.CompressionLevel > 9 {
+		flag.Usage()
+		return nil, fmt.Errorf("compression-level must be between 0 and 9")
+	}
 
-    switch destURL.Scheme {
-    case "oci":
-        if !isValidAuthType(destURL.Scheme, cfg.AuthType) {
-            flag.Usage()
-            return nil, fmt.Errorf("unsupported auth-type for oci: %s", cfg.AuthType)
-        }
-    case "s3":
-        if !isValidAuthType(destURL.Scheme, cfg.AuthType) {
-            flag.Usage()
-            return nil, fmt.Errorf("unsupported auth-type for s3: %s, expected AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE], S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]", cfg.AuthType)
-        }
-        if cfg.AuthType == "" {
-            cfg.AuthType = AuthTypeAWSDefault
-        }
-    }
+	destURL, err := url.Parse(destStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid destination URI: %v", err)
+	}
 
-    cfg.Destination = destURL
-    cfg.MinPartSize = cfg.MinPartSize * KiB * KiB // Convert to bytes
+	switch destURL.Scheme {
+	case "oci":
+		if !isValidAuthType(destURL.Scheme, cfg.AuthType) {
+			flag.Usage()
+			return nil, fmt.Errorf("unsupported auth-type for oci: %s", cfg.AuthType)
+		}
+	case "s3":
+		if !isValidAuthType(destURL.Scheme, cfg.AuthType) {
+			flag.Usage()
+			return nil, fmt.Errorf("unsupported auth-type for s3: %s, expected AWS_DEFAULT, AWS_CONFIG_FILE, AWS_CONFIG_FILE[PROFILE], S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY] or S3_ACCESS_KEYS[ACCESS_KEY:SECRET_KEY:SESSION_TOKEN]", cfg.AuthType)
+		}
+		if cfg.AuthType == "" {
+			cfg.AuthType = AuthTypeAWSDefault
+		}
+	}
 
-    return cfg, nil
+	cfg.Destination = destURL
+	cfg.MinPartSize = cfg.MinPartSize * KiB * KiB // Convert to bytes
+
+	return cfg, nil
 }

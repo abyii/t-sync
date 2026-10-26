@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,20 +24,29 @@ func (cw *countingWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
+// openFileWithRetry retries transient open failures (e.g. a file briefly locked
+// by another process) with 1s and 2s backoff. Missing or permission-denied
+// files fail immediately.
 func openFileWithRetry(path string) (*os.File, error) {
-	var file *os.File
+	const attempts = 3
 	var err error
-	for i := range 3 {
+	for i := range attempts {
+		var file *os.File
 		file, err = os.Open(path)
 		if err == nil {
 			return file, nil
 		}
-		time.Sleep(time.Duration(1<<i) * time.Second) // Exponential backoff: 1s, 2s, 4s
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+			return nil, err
+		}
+		if i < attempts-1 {
+			time.Sleep(time.Duration(1<<i) * time.Second)
+		}
 	}
 	return nil, err
 }
 
-func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, password string, ignoreFile string) error {
+func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, password string, ignoreFile string) (err error) {
 
 	var ignorer IgnoreParser
 	if ignoreFile != "" {
@@ -49,11 +60,18 @@ func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, pas
 	cw := &countingWriter{writer: writer}
 	zipWriter := zip.NewWriter(cw)
 
-	defer zipWriter.Close()
+	// Close writes the central directory; without it the archive is unreadable.
+	defer func() {
+		if closeErr := zipWriter.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to finalize zip archive: %w", closeErr)
+		}
+	}()
 	log.Printf("Creating zip archive for %s\n", srcDir)
 	totalUncompressed := int64(0)
 
-	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+	copyBuf := make([]byte, 32*KiB)
+
+	err = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -63,31 +81,28 @@ func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, pas
 			return err
 		}
 
-		checkPath := relPath
-		if info.IsDir() {
+		if relPath == "." {
+			return nil
+		}
+
+		zipPath := filepath.ToSlash(relPath)
+
+		checkPath := zipPath
+		if d.IsDir() {
 			checkPath += "/" // for directories, we should check with a trailing slash
 		}
 
 		if ignorer != nil && ignorer.MatchesPath(checkPath) {
 			log.Printf("Ignoring %s\n", relPath)
-			if info.IsDir() {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if info.IsDir() {
-			if relPath == "." {
-				return nil
-			}
-
-			dirName := filepath.ToSlash(relPath)
-			if len(dirName) > 0 && dirName[len(dirName)-1] != '/' {
-				dirName += "/"
-			}
-
-			_, err := zipWriter.Create(dirName, zip.Store, 0, zip.NoEncryption, "")
-			if err != nil {
+		if d.IsDir() {
+			dirName := zipPath + "/"
+			if _, err := zipWriter.Create(dirName, zip.Store, 0, zip.NoEncryption, ""); err != nil {
 				log.Printf("Failed to create zip entry for directory %s: %v\n", dirName, err)
 				return err
 			}
@@ -95,7 +110,7 @@ func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, pas
 			return nil
 		}
 
-		if !info.Mode().IsRegular() {
+		if !d.Type().IsRegular() {
 			return nil
 		}
 
@@ -110,22 +125,22 @@ func CreateZipArchive(srcDir string, writer io.Writer, compressionLevel int, pas
 
 		var entryWriter io.Writer
 		if password != "" {
-			entryWriter, err = zipWriter.Create(relPath, zip.Deflate, dynamicLevel, zip.StandardEncryption, password)
+			entryWriter, err = zipWriter.Create(zipPath, zip.Deflate, dynamicLevel, zip.StandardEncryption, password)
 		} else {
-			entryWriter, err = zipWriter.Create(relPath, zip.Deflate, dynamicLevel, zip.NoEncryption, "")
+			entryWriter, err = zipWriter.Create(zipPath, zip.Deflate, dynamicLevel, zip.NoEncryption, "")
 		}
 		if err != nil {
-			log.Printf("Failed to create zip entry for file %s: %v\n", relPath, err)
+			log.Printf("Failed to create zip entry for file %s: %v\n", zipPath, err)
 			return err
 		}
 
-		written, err := io.Copy(entryWriter, srcFile)
+		written, err := io.CopyBuffer(entryWriter, struct{ io.Reader }{srcFile}, copyBuf)
 		if err != nil {
 			return err
 		}
 		totalUncompressed += written
 
-		log.Printf("Added %s (%d bytes)\n", relPath, written)
+		log.Printf("Added %s (%d bytes)\n", zipPath, written)
 		return nil
 	})
 

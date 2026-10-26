@@ -6,14 +6,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
+	"net/http"
 	"os"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -107,6 +105,7 @@ func NewS3Uploader(bucket, object, authType string) (*S3Uploader, error) {
 
 	if cfg.Region == "" {
 		cfg.Region = "ap-south-1"
+		log.Printf("WARNING: AWS region not found in AWS_REGION, AWS_DEFAULT_REGION, the shared config, or EC2 IMDS; falling back to %s", cfg.Region)
 	}
 
 	client := s3.NewFromConfig(cfg)
@@ -128,35 +127,26 @@ func (u *S3Uploader) Initiate(ctx context.Context) (string, error) {
 		ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
+	var uploadID string
+	err := withRetry(ctx, "initiate multipart upload", func() error {
 		resp, err := u.client.CreateMultipartUpload(ctx, input)
-		if err == nil {
-			uploadID := *resp.UploadId
-			log.Printf("Successfully initiated multipart upload with ID: %s", uploadID)
-			return uploadID, nil
+		if err != nil {
+			return err
 		}
-
-		lastErr = err
-		if attempt < 3 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("Attempt %d failed to initiate multipart upload: %v. Retrying in %v...", attempt, lastErr, backoff)
-
-			select {
-			case <-ctx.Done():
-				return "", fmt.Errorf("context cancelled while waiting to retry initiate: %v", ctx.Err())
-			case <-time.After(backoff):
-			}
-		}
+		uploadID = *resp.UploadId
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return "", fmt.Errorf("failed to initiate multipart upload after 3 attempts: %v", lastErr)
+	log.Printf("Successfully initiated multipart upload with ID: %s", uploadID)
+	return uploadID, nil
 }
 
 func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) (string, error) {
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		input := &s3.UploadPartInput{
+	var etag string
+	err := withRetry(ctx, fmt.Sprintf("upload part %d", partNumber), func() error {
+		resp, err := u.client.UploadPart(ctx, &s3.UploadPartInput{
 			Bucket:            aws.String(u.bucket),
 			Key:               aws.String(u.object),
 			UploadId:          aws.String(uploadID),
@@ -164,56 +154,37 @@ func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber
 			ContentLength:     aws.Int64(int64(len(data))),
 			Body:              bytes.NewReader(data),
 			ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
+		})
+		if err != nil {
+			return err
 		}
-
-		resp, err := u.client.UploadPart(ctx, input)
-		// Explicitly nil the body to help GC, especially if the SDK holds the request object
-		input.Body = nil
-
-		if err == nil {
-			if resp.ETag == nil {
-				lastErr = fmt.Errorf("no ETag returned for part %d", partNumber)
-			} else if resp.ChecksumCRC64NVME == nil {
-				lastErr = fmt.Errorf("server did not return CRC64NVME checksum for part %d", partNumber)
-			} else {
-				u.partChecksums.Store(partNumber, *resp.ChecksumCRC64NVME)
-				// Copy the string to ensure we don't hold onto the entire response buffer
-				etag := string([]byte(*resp.ETag))
-				log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, etag, len(data))
-				// Clear body to help GC
-				input.Body = nil
-				runtime.GC()
-				return etag, nil
-			}
-		} else {
-			lastErr = err
+		if resp.ETag == nil {
+			return fmt.Errorf("no ETag returned for part %d", partNumber)
 		}
-
-		if attempt < 3 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("Attempt %d failed for part %d: %v. Retrying in %v...", attempt, partNumber, lastErr, backoff)
-
-			select {
-			case <-ctx.Done():
-				return "", fmt.Errorf("context cancelled while waiting to retry upload part %d: %v", partNumber, ctx.Err())
-			case <-time.After(backoff):
-			}
+		if resp.ChecksumCRC64NVME == nil {
+			return fmt.Errorf("server did not return CRC64NVME checksum for part %d", partNumber)
 		}
+		u.partChecksums.Store(partNumber, *resp.ChecksumCRC64NVME)
+		etag = *resp.ETag
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return "", fmt.Errorf("failed to upload part %d after 3 attempts: %v", partNumber, lastErr)
+	log.Printf("Successfully uploaded part %d with ETag: %s, %d bytes", partNumber, etag, len(data))
+	return etag, nil
 }
 
 func (u *S3Uploader) Complete(ctx context.Context, uploadID string, etags map[int]string) error {
 	log.Printf("Completing multipart upload %s with %d parts", uploadID, len(etags))
 
-	var partNums []int
+	partNums := make([]int, 0, len(etags))
 	for partNum := range etags {
 		partNums = append(partNums, partNum)
 	}
 	slices.Sort(partNums)
 
-	var completedParts []types.CompletedPart
+	completedParts := make([]types.CompletedPart, 0, len(partNums))
 	for _, partNum := range partNums {
 		cp := types.CompletedPart{
 			PartNumber: aws.Int32(int32(partNum)),
@@ -234,64 +205,35 @@ func (u *S3Uploader) Complete(ctx context.Context, uploadID string, etags map[in
 		},
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
+	err := withRetry(ctx, "complete multipart upload "+uploadID, func() error {
 		_, err := u.client.CompleteMultipartUpload(ctx, input)
-		if err == nil {
-			log.Printf("Successfully completed multipart upload %s", uploadID)
-			return nil
-		}
-
-		lastErr = err
-		if attempt < 3 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("Attempt %d failed to complete multipart upload %s: %v. Retrying in %v...", attempt, uploadID, lastErr, backoff)
-
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("context cancelled while waiting to retry complete: %v", ctx.Err())
-			case <-time.After(backoff):
-			}
-		}
+		return err
+	})
+	if err != nil {
+		return err
 	}
-
-	return fmt.Errorf("failed to complete multipart upload after 3 attempts: %v", lastErr)
+	log.Printf("Successfully completed multipart upload %s", uploadID)
+	return nil
 }
 
 func (u *S3Uploader) PutObject(ctx context.Context, data []byte) error {
 	log.Printf("Putting object %s with %d bytes (simple upload)", u.object, len(data))
 
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		input := &s3.PutObjectInput{
+	err := withRetry(ctx, "put object "+u.object, func() error {
+		_, err := u.client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:            aws.String(u.bucket),
 			Key:               aws.String(u.object),
 			ContentLength:     aws.Int64(int64(len(data))),
 			Body:              bytes.NewReader(data),
 			ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
-		}
-
-		_, err := u.client.PutObject(ctx, input)
-		input.Body = nil
-		if err == nil {
-			log.Printf("Successfully put object %s", u.object)
-			return nil
-		}
-
-		lastErr = err
-		if attempt < 3 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("Attempt %d failed to put object %s: %v. Retrying in %v...", attempt, u.object, lastErr, backoff)
-
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("context cancelled while waiting to retry put object: %v", ctx.Err())
-			case <-time.After(backoff):
-			}
-		}
+		})
+		return err
+	})
+	if err != nil {
+		return err
 	}
-
-	return fmt.Errorf("failed to put object after 3 attempts: %v", lastErr)
+	log.Printf("Successfully put object %s", u.object)
+	return nil
 }
 
 func (u *S3Uploader) Abort(ctx context.Context, uploadID string) error {
@@ -304,63 +246,17 @@ func (u *S3Uploader) Abort(ctx context.Context, uploadID string) error {
 		UploadId: aws.String(uploadID),
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
+	err := withRetry(ctx, "abort multipart upload "+uploadID, func() error {
 		_, err := u.client.AbortMultipartUpload(ctx, input)
-		if err == nil {
-			log.Printf("Successfully aborted multipart upload %s", uploadID)
+		if httpStatus(err) == http.StatusNotFound {
+			log.Printf("Multipart upload %s already aborted or not found", uploadID)
 			return nil
 		}
-
-		if strings.Contains(err.Error(), "NoSuchUpload") || strings.Contains(err.Error(), "404") {
-			return nil
-		}
-
-		lastErr = err
-		if attempt < 3 {
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("Attempt %d failed to abort multipart upload %s: %v. Retrying in %v...", attempt, uploadID, lastErr, backoff)
-
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("context cancelled while waiting to retry abort: %v", ctx.Err())
-			case <-time.After(backoff):
-			}
-		}
-	}
-
-	return fmt.Errorf("failed to abort multipart upload after 3 attempts: %v", lastErr)
-}
-
-// GetObjectRange retrieves a specific byte range from an object in S3
-func (u *S3Uploader) GetObjectRange(ctx context.Context, startByte, endByte int64) ([]byte, error) {
-	if startByte < 0 {
-		return nil, fmt.Errorf("start byte must be non-negative")
-	}
-	if endByte < startByte {
-		return nil, fmt.Errorf("end byte must be greater than or equal to start byte")
-	}
-
-	rangeHeader := fmt.Sprintf("bytes=%d-%d", startByte, endByte)
-	log.Printf("Getting object range: %s for object %s", rangeHeader, u.object)
-
-	input := &s3.GetObjectInput{
-		Bucket: aws.String(u.bucket),
-		Key:    aws.String(u.object),
-		Range:  aws.String(rangeHeader),
-	}
-
-	resp, err := u.client.GetObject(ctx, input)
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get object range: %v", err)
+		return err
 	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read object content: %v", err)
-	}
-
-	log.Printf("Successfully retrieved %d bytes from object range", len(data))
-	return data, nil
+	log.Printf("Successfully aborted multipart upload %s", uploadID)
+	return nil
 }

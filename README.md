@@ -27,15 +27,18 @@ upx ../bin/t-sync-s3
 ```
 
 ### Exit Codes
-```
-// exit codes that have similar meaning to HTTP status codes
-ExitCodeInvalidParameters    = 400 // Bad Parameters
-ExitCodeAuthenticationFailed = 401 // Authentication Failed with Object Storage Service
-ExitCodeUploadFailed         = 502 // Upload Failed with Object Storage Service
-ExitCodeUploaderClientFailed = 503 // Initialization of Uploader Client Failed with Object Storage Service
-ExitCodeZipArchiverFailed    = 504 // Failed to create zip archive
-ExitCodeInternalCodeError    = 500 // Internal Code Error. Problem when closing IO or Upload Channel Writer
-```
+Exit codes stay in the portable 0-255 range; they loosely mirror HTTP status codes (`4x` = caller error, `5x` = failure).
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | — | Success |
+| 40 | `ExitCodeInvalidParameters` | Bad flags, invalid destination, source is not a directory, or the output file/directory cannot be created |
+| 41 | `ExitCodeAuthenticationFailed` | Reserved; not currently emitted (auth errors surface as 52 or 53) |
+| 44 | `ExitCodeSourceDirNotFound` | Source directory does not exist |
+| 50 | `ExitCodeInternalCodeError` | Failed to close the output file or the upload channel writer |
+| 52 | `ExitCodeUploadFailed` | Upload to object storage failed (multipart upload is aborted) |
+| 53 | `ExitCodeUploaderClientFailed` | Object storage client could not be initialised |
+| 54 | `ExitCodeZipArchiverFailed` | Failed to create the zip archive |
 
 
 
@@ -64,6 +67,7 @@ systemd-run --scope -p CPUQuota=50% t-sync -s "../sample_data_size1" -d "oci://b
   ```
 
 #### OCI (`oci://namespace@bucket/key`)
+* *(default when `-auth-type` is omitted)*: Uses the OCI SDK default configuration provider: `DEFAULT` profile of `~/.oci/config` (or the file named by the `OCI_CONFIG_FILE` env var), then `~/.obmcs/config`, then `TF_VAR_*` environment variables.
 * **`OCI_CONFIG_FILE`** or **`OCI_CONFIG_FILE[PROFILE]`**: Uses `~/.oci/config` profile (default: `DEFAULT`).
 * **`INSTANCE_PRINCIPAL`**: Uses OCI Compute instance principal identity.
 * **`OKE_WORKLOAD_IDENTITY`**: Uses Oracle Container Engine for Kubernetes (OKE) workload identity.
