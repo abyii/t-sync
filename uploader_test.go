@@ -197,3 +197,48 @@ func TestPartsTakenFromProducerAreBoundedByConcurrency(t *testing.T) {
 		t.Fatalf("completed %v, want %v", g.completed, want)
 	}
 }
+
+// verifyingUploader checks each part's bytes before and after a pause, so a
+// buffer shared by two in-flight parts, or reused while still uploading, fails.
+type verifyingUploader struct {
+	fakeUploader
+	want     []byte
+	partSize int
+	bad      atomic.Int32
+}
+
+func (v *verifyingUploader) UploadPart(ctx context.Context, id string, n int, data []byte) (string, error) {
+	start := (n - 1) * v.partSize
+	want := v.want[start:min(start+v.partSize, len(v.want))]
+	if !bytes.Equal(data, want) {
+		v.bad.Add(1)
+	}
+	time.Sleep(time.Duration(n%7) * 100 * time.Microsecond)
+	if !bytes.Equal(data, want) {
+		v.bad.Add(1)
+	}
+	return v.fakeUploader.UploadPart(ctx, id, n, data)
+}
+
+func TestRecycledPartBuffersNeverShareData(t *testing.T) {
+	const partSize = 64
+	payload := make([]byte, partSize*500+17)
+	for i := range payload {
+		payload[i] = byte(i*31 + i>>8)
+	}
+	v := &verifyingUploader{want: payload, partSize: partSize}
+	writeErr, uploadErr := runPipeline(t, v, payload, partSize, 8)
+	if writeErr != nil || uploadErr != nil {
+		t.Fatalf("write=%v upload=%v", writeErr, uploadErr)
+	}
+	if n := v.bad.Load(); n != 0 {
+		t.Fatalf("%d part content mismatches during upload", n)
+	}
+	var got []byte
+	for _, n := range v.completed {
+		got = append(got, v.parts[n]...)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("reassembled parts differ from payload")
+	}
+}

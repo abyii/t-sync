@@ -16,6 +16,9 @@ type Part struct {
 }
 
 // ObjectStorageUploader defines the interface for a multipart upload.
+//
+// UploadPart and PutObject must not read or retain data after they return,
+// whatever the outcome: the caller recycles the buffer for later parts.
 type ObjectStorageUploader interface {
 	Initiate(ctx context.Context) (uploadID string, err error)
 	UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) (etag string, err error)
@@ -141,10 +144,10 @@ func uploadToObjectStorage(parentCtx context.Context, uploader ObjectStorageUplo
 	if len(part1.Data) < partSize {
 		log.Printf("Total size is %d bytes. Using simple upload.", len(part1.Data))
 		err := uploader.PutObject(ctx, part1.Data)
+		releasePartBuffer(part1.Data)
 		if err != nil {
 			return fmt.Errorf("failed to put object: %v", err)
 		}
-		releasePartBuffer(part1.Data)
 		if _, more := <-partChan; more {
 			return fmt.Errorf("internal error: received data after the final part")
 		}
@@ -175,11 +178,7 @@ func uploadToObjectStorage(parentCtx context.Context, uploader ObjectStorageUplo
 		}
 
 		etag, err := uploader.UploadPart(ctx, uploadID, part.Number, part.Data)
-		if err == nil {
-			// A 2xx means the server consumed the whole body. After an error the
-			// HTTP transport may still be reading it, so leave that buffer to the GC.
-			releasePartBuffer(part.Data)
-		}
+		releasePartBuffer(part.Data)
 		mu.Lock()
 		defer mu.Unlock()
 		if err != nil {
