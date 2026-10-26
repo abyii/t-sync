@@ -3,6 +3,7 @@
 package storage_clients
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -145,15 +146,13 @@ func (u *S3Uploader) Initiate(ctx context.Context) (string, error) {
 func (u *S3Uploader) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) (string, error) {
 	var etag string
 	err := withRetry(ctx, fmt.Sprintf("upload part %d", partNumber), func() error {
-		body := newPartBody(data)
-		defer body.revoke()
 		resp, err := u.client.UploadPart(ctx, &s3.UploadPartInput{
 			Bucket:            aws.String(u.bucket),
 			Key:               aws.String(u.object),
 			UploadId:          aws.String(uploadID),
 			PartNumber:        aws.Int32(int32(partNumber)),
 			ContentLength:     aws.Int64(int64(len(data))),
-			Body:              body,
+			Body:              bytes.NewReader(data),
 			ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
 		})
 		if err != nil {
@@ -221,13 +220,11 @@ func (u *S3Uploader) PutObject(ctx context.Context, data []byte) error {
 	log.Printf("Putting object %s with %d bytes (simple upload)", u.object, len(data))
 
 	err := withRetry(ctx, "put object "+u.object, func() error {
-		body := newPartBody(data)
-		defer body.revoke()
 		_, err := u.client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:            aws.String(u.bucket),
 			Key:               aws.String(u.object),
 			ContentLength:     aws.Int64(int64(len(data))),
-			Body:              body,
+			Body:              bytes.NewReader(data),
 			ChecksumAlgorithm: types.ChecksumAlgorithmCrc64nvme,
 		})
 		return err

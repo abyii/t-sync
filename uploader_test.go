@@ -31,7 +31,7 @@ func (f *fakeUploader) UploadPart(_ context.Context, _ string, n int, data []byt
 	if f.parts == nil {
 		f.parts = map[int][]byte{}
 	}
-	f.parts[n] = bytes.Clone(data) // data is recycled after return
+	f.parts[n] = bytes.Clone(data) // snapshot: detects later writes into the part
 	return "etag", nil
 }
 
@@ -199,7 +199,7 @@ func TestPartsTakenFromProducerAreBoundedByConcurrency(t *testing.T) {
 }
 
 // verifyingUploader checks each part's bytes before and after a pause, so a
-// buffer shared by two in-flight parts, or reused while still uploading, fails.
+// buffer shared by two in-flight parts, or written to while uploading, fails.
 type verifyingUploader struct {
 	fakeUploader
 	want     []byte
@@ -220,7 +220,7 @@ func (v *verifyingUploader) UploadPart(ctx context.Context, id string, n int, da
 	return v.fakeUploader.UploadPart(ctx, id, n, data)
 }
 
-func TestRecycledPartBuffersNeverShareData(t *testing.T) {
+func TestPartsNeverShareBuffers(t *testing.T) {
 	const partSize = 64
 	payload := make([]byte, partSize*500+17)
 	for i := range payload {

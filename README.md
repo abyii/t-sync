@@ -50,6 +50,14 @@ Zipping/Deflate is a CPU-intensive operation. To limit the CPU usage, you can us
 systemd-run --scope -p CPUQuota=50% t-sync -s "../sample_data_size1" -d "oci://bmcx0flrsnis@test-bucket-for-poc/output_cpu_limit.zip" -auth-type OCI_CONFIG_FILE
 ```
 
+### Limiting Memory Usage.
+
+Part data in memory is at most `(max-parts-in-memory + 1) x part size` (10 parts of 10 MiB by default). On top of that the Go GC keeps headroom set by `GOGC` (default 100). On memory-constrained hosts, set `GOGC=25`: in a 37 GiB OCI backup on a 4-core host this cut typical RSS from ~100 MB to ~65 MB with no change in run time.
+
+```
+GOGC=25 t-sync -s "./data" -d "oci://namespace@bucket/backup.zip" -auth-type OKE_WORKLOAD_IDENTITY
+```
+
 ### Authentication Types
 
 #### S3 (`s3://bucket/key`)

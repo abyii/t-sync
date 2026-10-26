@@ -3,8 +3,10 @@
 package storage_clients
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"slices"
@@ -120,8 +122,6 @@ func (u *OCIUploader) Initiate(ctx context.Context) (string, error) {
 func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumber int, data []byte) (string, error) {
 	var etag string
 	err := withRetry(ctx, fmt.Sprintf("upload part %d", partNumber), func() error {
-		body := newPartBody(data)
-		defer body.revoke()
 		resp, err := u.client.UploadPart(ctx, objectstorage.UploadPartRequest{
 			NamespaceName:  &u.namespace,
 			BucketName:     &u.bucket,
@@ -129,7 +129,7 @@ func (u *OCIUploader) UploadPart(ctx context.Context, uploadID string, partNumbe
 			UploadId:       &uploadID,
 			UploadPartNum:  &partNumber,
 			ContentLength:  new(int64(len(data))),
-			UploadPartBody: body,
+			UploadPartBody: io.NopCloser(bytes.NewReader(data)),
 		})
 		if err != nil {
 			return err
@@ -187,14 +187,12 @@ func (u *OCIUploader) PutObject(ctx context.Context, data []byte) error {
 	log.Printf("Putting object %s with %d bytes (simple upload)", u.object, len(data))
 
 	err := withRetry(ctx, "put object "+u.object, func() error {
-		body := newPartBody(data)
-		defer body.revoke()
 		_, err := u.client.PutObject(ctx, objectstorage.PutObjectRequest{
 			NamespaceName: &u.namespace,
 			BucketName:    &u.bucket,
 			ObjectName:    &u.object,
 			ContentLength: new(int64(len(data))),
-			PutObjectBody: body,
+			PutObjectBody: io.NopCloser(bytes.NewReader(data)),
 		})
 		return err
 	})
